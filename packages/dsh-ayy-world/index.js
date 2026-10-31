@@ -33,6 +33,7 @@ const SELF_HISTORY = join(WORLD_DIR, 'who-i-am-history')
 const DIARY_DIR = join(WORLD_DIR, 'diary')
 const DIARY_HISTORY = join(WORLD_DIR, 'diary-history')
 const CACHE_DIR = join(WORLD_DIR, 'transcripts')
+const WANTS_FILE = join(WORLD_DIR, 'wants.md')
 const BRIDGE_CFG = join(HOME, 'qq-bridge-config.json')
 
 const NODE_CANDIDATES = [
@@ -202,7 +203,46 @@ export function apply(ctx) {
     },
   })
 
-  // ③ 翻某天原文
+  // ③ 记一条心愿
+  define({
+    name: 'ayy_want',
+    description:
+      '记下你想要的东西——缺的能力、缺的工具、缺的做法。往心愿单里添一行，带日期。' +
+      '想到就记，不用攒着；一条一件事，写清"想要什么"和"为什么"。' +
+      '只传 read=true 可以看整张心愿单。',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '想要什么，一句话' },
+        why: { type: 'string', description: '可选：为什么想要（越具体越有用）' },
+        read: { type: 'boolean', description: '只看心愿单，不写' },
+      },
+    },
+    output: emptyOutput(),
+    async execute(args) {
+      if (args?.read) {
+        const body = readText(WANTS_FILE)
+        return { ok: true, file: WANTS_FILE, chars: body.trim().length, content: body.trim() || '（心愿单还是空的）' }
+      }
+
+      const text = String(args?.text || '').trim()
+      if (!text) throw new Error('text 不能为空：说清你想要什么')
+      const why = String(args?.why || '').trim()
+
+      const header =
+        '# 我想要的东西\n\n' +
+        '> 她写。想到什么缺的能力、缺的工具、缺的做法，就往这儿记一条。\n' +
+        '> 一条一句，写清"想要什么"和"为什么"。\n\n'
+      const old = readText(WANTS_FILE)
+      const base = old.trim() ? old.replace(/\s*$/, '\n') : header
+      const line = `- ${todayStr()} · ${text}${why ? ` · ${why}` : ''}\n`
+      writeText(WANTS_FILE, base + line)
+
+      return { ok: true, file: WANTS_FILE, added: line.trim() }
+    },
+  })
+
+  // ④ 翻某天原文
   define({
     name: 'ayy_recall',
     description:
