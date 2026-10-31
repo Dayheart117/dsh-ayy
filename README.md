@@ -26,15 +26,29 @@
 
 ## 安装
 
-市场里可以直接装。手动装也行：把对应包目录作为本地依赖加进你的 profile，或在 profile 的 `package.json` 里写
+市场里可以直接装单个包。手动装也行：把对应包目录作为本地依赖加进你的 profile，或在 profile 的 `package.json` 里写
 `"dsh-ayy-world": "file:<本仓库路径>/packages/dsh-ayy-world"`。
 
 每个包都声明了 `dsh.bundle`，所以 `dsh plugin add` 认得它们。
 
+### 想要「一整套」的安装顺序
+
+`dsh-anyuanyue-preset` 是这一套的入口：它不只是依赖清单，还决定这个人是谁（人格正文）以及带哪些能力。
+但它**没有把下面几个包声明成依赖**（仓库里用的是本机绝对路径，换台机器会失效），所以顺序要手动来：
+
+1. 先装功能包：`dsh-ayy-voice`、`dsh-ayy-sing`、`dsh-ayy-world`、`dsh-ayy-poke`、`dsh-ayy-skill`
+2. 最后装 `dsh-anyuanyue-preset`，在 Agent 预设里选它
+
+少装一个功能包不会崩，只是预设里那条插件挂不上，对应能力缺席。
+
+> 为什么不合一个大包：这几天的实测里，一个插件的 `inject` 写错、或者顶层 import 到宿主不支持的内置模块，
+> **整个 agent preset 会从列表里消失**。小包各自独立，坏一个不影响其它。
+
 ## 它们怎么工作的
 
-- `ayy_world` 的所有数据都是纯 markdown，落在 `~/.dsh/personas/`：日记按「日期.场景」分文件，被覆盖的旧版进 `diary-history/`；自我认知在 `who-i-am.md`，旧版进 `who-i-am-history/`；翻原文的缓存进 `transcripts/`。没有数据库，删掉就是删掉了。
+- `dsh-ayy-world` 的数据是纯 markdown，落在 `~/.dsh/personas/`：日记按「日期.场景」分文件，被覆盖的旧版进 `diary-history/`；自我认知在 `who-i-am.md`，旧版进 `who-i-am-history/`；翻原文的缓存进 `transcripts/`。没有数据库，删掉就是删掉了。
 - `ayy_recall` 解压会话日志是在**独立子进程**里做的（`tools/recall.cjs`，用 dsh 自带的 node），因为主进程里 import `node:zlib` 的 zstd 在部分 Electron 版本上会失败，连带把整个 agent preset 拖垮。
+- `dsh-ayy-skill` 让 agent 自己写技能（`~/.dsh/skills/<name>/SKILL.md`）。为什么不直接用宿主的写文件工具：技能目录在工作区之外，会话里写它要过沙箱审批，而 QQ 那头没人能点「允许」，agent 会卡在等待里。工具走宿主进程落盘，绕开这条约束。**技能名必须是 ASCII**——中文名能写进目录，但 `skill` 工具加载时会被拒绝。
 - `ayy_poke` 只调用 NapCat 的发送接口，不改任何 QQ 状态。
 
 ## 许可
