@@ -1,0 +1,28 @@
+{
+  "name": "dsh-ayy-world",
+  "version": "0.2.0",
+  "description": "安源悦 · 记忆：写日记、改自述、翻某天对话原文",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "tools/recall.cjs",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "memory",
+    "diary"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "dsh-ayy-voice",
+  "version": "0.1.0",
+  "description": "安源悦 · 说话：把文字变成她自己的声音，发成 QQ 语音条",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "tts",
+    "voice",
+    "qq"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "dsh-ayy-sing",
+  "version": "0.3.0",
+  "description": "安源悦 · 唱歌：音高 + 歌词 → 合成 → 换声 → QQ 语音条",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "tts",
+    "singing",
+    "qq"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

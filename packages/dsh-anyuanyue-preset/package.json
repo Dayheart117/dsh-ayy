@@ -1,0 +1,12 @@
+{
+  "name": "dsh-anyuanyue-preset",
+  "version": "1.0.0",
+  "private": true,
+  "description": "陪伴人格预设（模板）：把说话 / 唱歌 / 记忆 / 戳一戳组进一个 agent",
+  "type": "module",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
