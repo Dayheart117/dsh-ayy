@@ -80,12 +80,101 @@ function allowedRel(rel) {
   return false
 }
 
+// ── 技能（另一棵目录：~/.dsh/skills/<name>/SKILL.md）───────────────────────
+
+function skillsDir() {
+  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(dshHome, 'skills')
+}
+
+/** 只取 frontmatter 里的 description，够列表用 */
+function frontmatterDescription(text) {
+  const m = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/)
+  if (!m) return ''
+  const line = m[1].match(/^description:\s*(.*)$/m)
+  return line ? line[1].replace(/^["']|["']$/g, '').trim() : ''
+}
+
+function listSkills() {
+  const dir = skillsDir()
+  if (!existsSync(dir)) return []
+  const out = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue
+    const file = join(dir, e.name, 'SKILL.md')
+    if (!existsSync(file)) continue
+    let st
+    try {
+      st = statSync(file)
+    } catch {
+      continue
+    }
+    const raw = readText(file)
+    out.push({
+      name: e.name,
+      description: frontmatterDescription(raw),
+      chars: raw.trim().length,
+      mtime: st.mtimeMs,
+    })
+  }
+  return out.sort((a, b) => b.mtime - a.mtime)
+}
+
+function skillFile(name) {
+  const n = String(name || '').trim()
+  if (!n || /[\\/:*?"<>|]/.test(n) || n.includes('..') || n.startsWith('.')) return null
+  const file = join(skillsDir(), n, 'SKILL.md')
+  return existsSync(file) ? file : null
+}
+
+/** 成长时间线：日记 / 旧日记 / 自述 / 技能 / 心愿单，按修改时间倒序 */
+function timeline(diaries, skills) {
+  const events = []
+  const push = (t, kind, label, ref) => {
+    if (!t) return
+    events.push({ t, kind, label, ref })
+  }
+
+  for (const d of diaries) {
+    const base = d.name.replace(/\.md$/, '')
+    const dot = base.indexOf('.')
+    const day = dot < 0 ? base : base.slice(0, dot)
+    const scene = dot < 0 ? '' : base.slice(dot + 1).replace(/_/g, ':')
+    push(d.mtime, 'diary', scene ? `${day} · ${scene}` : day, { tab: 'diary', rel: d.rel })
+  }
+  for (const d of listDir('diary-history')) {
+    push(d.mtime, 'diaryArchive', d.name.replace(/\.md$/, ''), { tab: 'oldDiary', rel: d.rel })
+  }
+  for (const s of skills) {
+    push(s.mtime, 'skill', s.name, { tab: 'skills', name: s.name })
+  }
+  for (const h of listDir('who-i-am-history')) {
+    push(h.mtime, 'selfArchive', h.name.replace(/\.md$/, ''), { tab: 'self', rel: h.rel })
+  }
+
+  const selfFile = join(personasDir(), 'who-i-am.md')
+  if (existsSync(selfFile)) {
+    try {
+      push(statSync(selfFile).mtimeMs, 'self', '自我认知（当前）', { tab: 'self', rel: 'who-i-am.md' })
+    } catch {}
+  }
+  const wantsFile = join(personasDir(), 'wants.md')
+  if (existsSync(wantsFile)) {
+    try {
+      push(statSync(wantsFile).mtimeMs, 'wants', '心愿单', { tab: 'wants' })
+    } catch {}
+  }
+
+  return events.sort((a, b) => b.t - a.t).slice(0, 120)
+}
+
 function overview() {
   const diaries = listDir('diary')
+  const skills = listSkills()
   return {
     dir: personasDir(),
     diaries,
-    diaryHistory: listDir('diary-history').length,
+    diaryHistory: listDir('diary-history'),
     self: {
       exists: existsSync(join(personasDir(), 'who-i-am.md')),
       chars: readText(join(personasDir(), 'who-i-am.md')).trim().length,
@@ -95,6 +184,8 @@ function overview() {
       exists: existsSync(join(personasDir(), 'wants.md')),
       chars: readText(join(personasDir(), 'wants.md')).trim().length,
     },
+    skills,
+    timeline: timeline(diaries, skills),
   }
 }
 
@@ -126,6 +217,23 @@ export function apply(ctx) {
           const full = join(personasDir(), rel)
           if (!existsSync(full)) return json(res, 404, { ok: false, error: 'not-found' })
           json(res, 200, { ok: true, rel, name: basename(full), content: readText(full) })
+        } catch (error) {
+          json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: `${API_PREFIX}/skill`,
+      handler: (req, res) => {
+        if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (!requireSameOrigin(req, res)) return
+        try {
+          const url = new URL(req.url || '/', 'http://localhost')
+          const name = url.searchParams.get('name') || ''
+          const file = skillFile(name)
+          if (!file) return json(res, 404, { ok: false, error: 'not-found' })
+          json(res, 200, { ok: true, name, content: readText(file) })
         } catch (error) {
           json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
         }
