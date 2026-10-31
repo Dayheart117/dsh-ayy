@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
 		const NS = 'ayyDesk';
 
 		const zh = {
-			nav: '她',
+			nav: '她的本子',
 			intro: '只读。她自己写下的东西都在这里：日记、自我认知、心愿单。这个页面不会改任何文件。',
 			tabDiary: '日记',
 			tabSelf: '自我认知',
