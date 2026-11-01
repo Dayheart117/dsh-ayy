@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ayy-note",
+  "version": "0.1.0",
+  "description": "安源悦 · 本子：按主题写自己的东西（身世、小传、错题、想法）",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "note"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

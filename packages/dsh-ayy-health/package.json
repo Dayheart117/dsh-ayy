@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ayy-health",
+  "version": "0.1.0",
+  "description": "安源悦 · 每日自检：6 小时查一遍她的工具/QQ 桥/收文件/语音/插件目录，真故障写进最近动态",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "health"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
