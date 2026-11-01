@@ -10,7 +10,7 @@
  *
  * 三层落点：
  *   - 每次结果一行写进 personas/health.log（带时间；故障写清哪项、什么现象）
- *   - 只有真故障才往 MEMORY.md「最近动态」加一条（她下一轮就看得到）
+ *   - 只有真故障才往 her-memory.md「最近动态」加一条（她下一轮就看得到）
  *   - 同一个故障同一天只写一次（personas/health-state.json 记 hash + 日期）
  *
  * 关键语义：**9881（TTS daemon）没在跑不算故障** —— 它按需拉起、闲时释放，平时就是 down。
@@ -334,10 +334,10 @@ function commitFreshFaults(p, fresh, days) {
 }
 
 function appendFaultsToMemory(p, fails) {
-  if (!existsSync(p.memory)) return { wrote: 0, error: 'MEMORY.md 不存在' }
+  if (!existsSync(p.memory)) return { wrote: 0, error: 'her-memory.md 不存在' }
   const text = readText(p.memory)
   const parsed = parseSection(text, RECENT_SECTION)
-  if (!parsed) return { wrote: 0, error: `MEMORY.md 里找不到「${RECENT_SECTION}」` }
+  if (!parsed) return { wrote: 0, error: `her-memory.md 里找不到「${RECENT_SECTION}」` }
 
   const d = new Date()
   const stamp = `${dateStr(d)} ${hhmm(d)}`
@@ -354,7 +354,7 @@ function appendFaultsToMemory(p, fails) {
     copyFileSync(p.memory, p.memoryBak)
     writeText(p.memory, rebuildSection(parsed))
   } catch (error) {
-    return { wrote: 0, error: `写 MEMORY.md 失败：${errText(error)}` }
+    return { wrote: 0, error: `写 her-memory.md 失败：${errText(error)}` }
   }
   return { wrote }
 }

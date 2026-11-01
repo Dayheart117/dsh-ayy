@@ -378,7 +378,8 @@ function wantsItems() {
 // ── 动态（MEMORY.md 的「最近动态」+ 月度流水）──────────────────────────────
 
 function recentLines() {
-  const file = join(memoryDir(), 'MEMORY.md')
+  // 记忆拆家后，「最近动态」在 personas/her-memory.md（memory/MEMORY.md 只剩全局那几句）
+  const file = join(personasDir(), 'her-memory.md')
   const text = readText(file)
   const idx = text.indexOf('## 最近动态')
   if (idx < 0) return []
