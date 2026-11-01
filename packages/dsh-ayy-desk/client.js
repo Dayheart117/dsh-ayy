@@ -185,17 +185,19 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: s.btn, onClick: () => location.reload() }, t('retry'))));
 			}
 
-			const diaryItems = (overview.diaries || []).map((d) => {
+			// 后端可能是旧版（字段类型不同），一律先归一成数组，别让一个字段把整页打崩
+			const arr = (v) => (Array.isArray(v) ? v : []);
+			const diaryItems = arr(overview.diaries).map((d) => {
 				const parts = splitName(d.name);
 				return { key: d.rel, label: parts.scene ? parts.day + ' · ' + parts.scene : d.name, sub: (d.size / 1024).toFixed(1) + ' KB' };
 			});
-			const oldItems = (overview.diaryHistory || []).map((d) => ({
+			const oldItems = arr(overview.diaryHistory).map((d) => ({
 				key: d.rel, label: d.name.replace(/\.md$/, ''), sub: (d.size / 1024).toFixed(1) + ' KB'
 			}));
-			const historyItems = ((overview.self && overview.self.history) || []).map((d) => ({
+			const historyItems = arr(overview.self && overview.self.history).map((d) => ({
 				key: d.rel, label: d.name.replace(/\.md$/, ''), sub: fmtTime(d.mtime)
 			}));
-			const skillItems = (overview.skills || []).map((k) => ({
+			const skillItems = arr(overview.skills).map((k) => ({
 				key: k.name, label: k.name, sub: k.description || ''
 			}));
 
@@ -226,7 +228,7 @@ window.__ModuleLoader__.load({
 					h(List, { items: skillItems, selected: pick.skill, onPick: (k) => set({ skill: k }), emptyText: t('emptySkills') }),
 					h(Content, { t, skillName: pick.skill, empty: t('pickOne') }));
 			} else {
-				const events = overview.timeline || [];
+				const events = arr(overview.timeline);
 				if (!events.length) {
 					body = h('div', { style: s.pane }, h('p', { style: s.status }, t('emptyTimeline')));
 				} else {
