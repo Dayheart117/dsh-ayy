@@ -28,7 +28,19 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-echo Moving %SRC%  ->  %DST%
+rem if the destination exists but is a plain file, remove it (left over from an earlier bad run:
+rem an `echo ... -> ...` line in cmd redirects into a file, that is exactly what happened)
+if exist "%DST%" (
+  if exist "%DST%\" (
+    echo [INFO] Destination folder already exists, will merge into it.
+  ) else (
+    echo [INFO] Removing stray file at destination.
+    del /f /q "%DST%"
+  )
+)
+if not exist "%DST%\" mkdir "%DST%"
+
+echo Moving source to destination...
 robocopy "%SRC%" "%DST%" /MOVE /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1
 if exist "%SRC%" (
   echo [FAIL] Original folder still exists - something holds it. Nothing changed.

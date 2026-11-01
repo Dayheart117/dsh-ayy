@@ -1,0 +1,6 @@
+# dsh-ayy-notice: fixed-port HTTP receiver for NapCat notice reports
+# (poke, recall, group increase/decrease). Notice events are not messages, so the
+# polling bridge can never see them; this plugin listens on 127.0.0.1:9898 instead.
+- insert:
+    - id: ayy-notice
+      name: dsh-ayy-notice
