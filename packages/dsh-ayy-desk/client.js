@@ -21,6 +21,9 @@ window.__ModuleLoader__.load({
 			tabSelf: '自我认知',
 			tabWants: '心愿单',
 			tabLedger: '动态',
+			tabNotes: '本子',
+			emptyNotes: '她还没写过本子。',
+			pickNote: '左边选一本。',
 			tabSkills: '技能',
 			tabTimeline: '时间线',
 			tabSearch: '搜索',
@@ -153,6 +156,9 @@ window.__ModuleLoader__.load({
 			tabSelf: 'Self',
 			tabWants: 'Wishes',
 			tabLedger: 'Activity',
+			tabNotes: 'Notes',
+			emptyNotes: 'No notebooks yet.',
+			pickNote: 'Pick one on the left.',
 			tabSkills: 'Skills',
 			tabTimeline: 'Timeline',
 			tabSearch: 'Search',
@@ -1271,7 +1277,7 @@ window.__ModuleLoader__.load({
 			const [today, setToday] = React.useState({ status: 'loading' });
 			const [seen, setSeen] = React.useState(() => loadSeen());
 			const [pick, setPick] = React.useState({
-				diary: null, oldDiary: null, history: null, skill: null,
+				diary: null, oldDiary: null, history: null, skill: null, note: null,
 				ledgerMonth: null, file: null, transcript: null
 			});
 			const [nonce, setNonce] = React.useState(0);
@@ -1326,7 +1332,7 @@ window.__ModuleLoader__.load({
 
 			const tabs = [
 				['today', t('tabToday')], ['diary', t('tabDiary')], ['oldDiary', t('tabOldDiary')],
-				['self', t('tabSelf')], ['wants', t('tabWants')], ['ledger', t('tabLedger')],
+				['self', t('tabSelf')], ['wants', t('tabWants')], ['notes', t('tabNotes')], ['ledger', t('tabLedger')],
 				['skills', t('tabSkills')], ['timeline', t('tabTimeline')], ['search', t('tabSearch')],
 				['files', t('tabFiles')], ['transcripts', t('tabTranscripts')], ['memory', t('tabMemory')],
 				['storage', t('tabStorage')]
@@ -1400,6 +1406,22 @@ window.__ModuleLoader__.load({
 						selectedRel: 'wants.md'
 					})
 					: h(Content, { t, rel: 'wants.md', empty: t('emptyWants') });
+			} else if (tab === 'notes') {
+				// 她自己的本子：notes/<名字>.md（按主题，不是按天）
+				const notes = arr(overview.notes);
+				const noteItems = notes.map((n) => ({
+					key: n.rel,
+					label: n.name.replace(/\.md$/, ''),
+					sub: (Number(n.size) / 1024).toFixed(1) + ' KB'
+				}));
+				body = h('div', { style: s.split },
+					h(List, {
+						items: noteItems,
+						selected: pick.note,
+						onPick: (k) => set({ note: k }),
+						emptyText: t('emptyNotes')
+					}),
+					h(Content, { t, rel: pick.note, empty: t('pickNote') }));
 			} else if (tab === 'ledger') {
 				const recent = arr(overview.ledger && overview.ledger.recent);
 				const months = arr(overview.ledger && overview.ledger.months);

@@ -238,7 +238,7 @@ function listDir(dirName, ext = '.md') {
 function allowedRel(rel) {
   const r = String(rel || '').replace(/\\/g, '/')
   if (r === 'who-i-am.md' || r === 'wants.md') return true
-  if (!r.includes('..') && /^(diary|diary-history|who-i-am-history|ledger|transcripts)\/[^/]+\.md$/.test(r)) return true
+  if (!r.includes('..') && /^(diary|diary-history|who-i-am-history|ledger|transcripts|notes)\/[^/]+\.md$/.test(r)) return true
   return false
 }
 
@@ -628,6 +628,7 @@ function overview() {
       items: wantsItems(),
     },
     skills,
+    notes: listDir('notes'),
     ledger: { recent: recentLines(), recentItems: recentItems(), months: ledgerMonths() },
     timeline: timeline(diaries, skills),
   }
