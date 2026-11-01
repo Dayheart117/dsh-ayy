@@ -1,7 +1,7 @@
 {
   "name": "dsh-ayy-desk",
-  "version": "0.1.0",
-  "description": "安源悦 · 笔记本：在设置里只读地看她的日记、自我认知和心愿单",
+  "version": "0.2.0",
+  "description": "安源悦 · 笔记本：今天新增了什么、日记、自述、心愿单（可改状态）、技能（可编辑）、动态、时间线、搜索、收件箱、原文缓存、归档记忆、存储占用",
   "type": "module",
   "main": "./index.js",
   "exports": {
