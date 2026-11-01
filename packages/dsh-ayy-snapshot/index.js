@@ -22,7 +22,10 @@ const OUT_DIR = join(HOME, 'ayy-snapshot')
 const LOG_FILE = join(OUT_DIR, 'snapshot.log')
 const LOG_MAX = 1024 * 1024
 const SCRIPT = 'E:\\AI\\dsh-ayy\\tools\\backup-memory.ps1'
-const INTERVAL_MS = 5 * 60 * 1000
+// 每 3 秒看一眼签名；发现变了再等 5 秒（把一次操作里的连写合成一条），然后立刻提交。
+// 这样一次改动 = 一条 commit，它的父提交就是「改之前」的样子，能单独 revert 回退到改前。
+const POLL_MS = 3 * 1000
+const SETTLE_MS = 5 * 1000
 const WATCH = ['memory', 'personas', 'skills'].map((d) => join(HOME, d))
 
 let lastSig = ''
@@ -61,7 +64,8 @@ function signature() {
       const p = join(dir, e.name)
       if (e.isDirectory()) {
         // 跳过旧版归档和回收站：那些每备份一次就会变，会把签名搅乱
-        if (['notes-history', 'diary-history', 'who-i-am-history', '.trash', 'transcripts'].includes(e.name)) continue
+        // `.history` 是 ayy_memory 的改前备份，进 git 会把仓库撑爆，也不算"她的改动"
+        if (['notes-history', 'diary-history', 'who-i-am-history', '.trash', 'transcripts', '.history'].includes(e.name)) continue
         walk(p, depth + 1)
         continue
       }
@@ -96,9 +100,13 @@ function snapshot(reason) {
 
 export function apply(ctx) {
   mkdirSync(OUT_DIR, { recursive: true })
-  log(`已加载：每 ${INTERVAL_MS / 60000} 分钟看一眼 memory/personas/skills，变了就提交一次`)
+  log(`已加载：每 ${POLL_MS / 1000} 秒看一眼 memory/personas/skills，一变就提交（改动后 ${SETTLE_MS / 1000} 秒落定）`)
+
+  let pending = null // 等待落定的 timer
+  let busy = false
 
   const tick = () => {
+    if (busy) return // 上一次提交还没跑完，先不叠加
     try {
       const sig = signature()
       if (!sig) return
@@ -109,27 +117,39 @@ export function apply(ctx) {
         log(`基线：${sig}`)
         return
       }
-      lastSig = sig
       if (!existsSync(SCRIPT)) {
         log(`找不到备份脚本：${SCRIPT}`)
         return
       }
-      snapshot(`签名 ${sig}`)
+      // 变了一次：先记下新签名，等它落定（避免一次操作里连写好几次打一串提交）
+      lastSig = sig
+      if (pending) clearTimeout(pending)
+      pending = setTimeout(() => {
+        pending = null
+        busy = true
+        try {
+          snapshot(`签名 ${sig}`)
+        } finally {
+          busy = false
+        }
+      }, SETTLE_MS)
+      if (typeof pending.unref === 'function') pending.unref()
     } catch (error) {
       log(`tick 出错（已忽略）：${error && error.message}`)
     }
   }
 
-  // 启动 90 秒后先看一次，然后每 5 分钟
+  // 启动 5 秒后先记基线，然后每 3 秒看一次
   const timers = []
-  timers.push(setTimeout(tick, 90 * 1000))
-  const interval = setInterval(tick, INTERVAL_MS)
+  timers.push(setTimeout(tick, 5 * 1000))
+  const interval = setInterval(tick, POLL_MS)
   if (typeof interval.unref === 'function') interval.unref()
   for (const t of timers) if (typeof t.unref === 'function') t.unref()
 
   ctx.effect(() => () => {
     clearInterval(interval)
     for (const t of timers) clearTimeout(t)
+    if (pending) clearTimeout(pending)
     log('已卸载（定时器都收掉了）')
   })
 }
