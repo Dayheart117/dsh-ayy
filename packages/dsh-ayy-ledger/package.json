@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ayy-ledger",
+  "version": "0.1.0",
+  "description": "安源悦 · 动态：跨场合的短期记忆，写进 MEMORY.md 让每间会话都看得到",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "memory"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
