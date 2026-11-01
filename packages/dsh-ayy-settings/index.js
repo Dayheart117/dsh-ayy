@@ -689,6 +689,8 @@ function allSessions() {
   }
   for (const ws of workspaces) {
     const wsDir = join(root, ws.name)
+    // 跳过 dsh 自己内部跑的会话（刷B站/鲸鱼那些后台任务），列出来只会让人挑花眼
+    if (/-dsh-(bili|whale)-/.test(ws.name)) continue
     let sess = []
     try {
       sess = readdirSync(wsDir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name.startsWith('session-'))
@@ -707,8 +709,9 @@ function allSessions() {
           break
         }
       }
-      // 工作区目录名是 DSH 压过的（--E-Dayheart-project-xxx--），还原成人看得懂的
-      const pretty = ws.name.replace(/^--/, '').replace(/--$/, '').replace(/-/g, '\\')
+      // 工作区目录名是 DSH 压过的（--E-Dayheart-project-xxx--）。
+      // 不能把 - 换回 \：DSH 把 \ / : 都换成了 -，反推不回去，会造出假路径。
+      const pretty = ws.name.replace(/^--/, '').replace(/--$/, '')
       out.push({ id: s.name, workspace: pretty, workspaceKey: ws.name, mtime, size })
     }
   }
