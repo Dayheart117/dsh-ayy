@@ -1,27 +1,27 @@
 {
-  "name": "dsh-ayy-snapshot",
-  "version": "0.1.0",
-  "description": "安源悦 · 快照：她的记忆每变一次就提交一条，随时能单独回滚",
-  "type": "module",
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "cordis.patch.yml"
-  ],
-  "keywords": [
-    "dsh-plugin",
-    "ayy",
-    "snapshot",
-    "backup"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  }
+    "name":  "dsh-ayy-snapshot",
+    "version":  "0.1.0",
+    "description":  "安源悦 · 快照（已停用）：曾用轮询提交 git，现在改由 ayy_memory 写完即提交",
+    "type":  "module",
+    "main":  "index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "index.js",
+                  "cordis.patch.yml"
+              ],
+    "keywords":  [
+                     "dsh-plugin",
+                     "ayy",
+                     "snapshot",
+                     "backup"
+                 ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            }
 }

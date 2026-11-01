@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
 		};
 
 		const zh = {
-			nav: '她的本子',
+			nav: '源的本子',
 			intro: '她自己写的、自己长的东西都在这儿：今天有什么新的、日记、自述、心愿单、技能、动态、收件箱、原文缓存和归档记忆。技能和心愿单状态可以在这里改，其余只读。',
 			tabToday: '今天',
 			tabDiary: '日记',
@@ -21,8 +21,8 @@ window.__ModuleLoader__.load({
 			tabSelf: '自我认知',
 			tabWants: '心愿单',
 			tabLedger: '动态',
-			tabNotes: '本子',
-			emptyNotes: '她还没写过本子。',
+			tabNotes: '随笔本',
+			emptyNotes: '她还没写过随笔本。',
 			pickNote: '左边选一本。',
 			tabSkills: '技能',
 			tabTimeline: '时间线',
@@ -148,7 +148,7 @@ window.__ModuleLoader__.load({
 		};
 
 		const en = {
-			nav: 'Her notebook',
+			nav: "Yuan's Notebook",
 			intro: 'Everything she writes and grows is here: what is new today, diary, self-description, wishes, skills, activity, inbox, transcript cache and archived memory. Skills and wish status are editable; the rest is read-only.',
 			tabToday: 'Today',
 			tabDiary: 'Diary',

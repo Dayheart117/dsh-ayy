@@ -54,7 +54,7 @@ function home() {
 function paths(over = {}) {
   const h = home()
   const personas = join(h, 'personas')
-  const memory = over.memoryFile || join(h, 'memory', 'MEMORY.md')
+  const memory = over.memoryFile || join(h, 'personas', 'her-memory.md')
   return {
     home: h,
     personas,
