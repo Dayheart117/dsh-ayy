@@ -1,0 +1,4 @@
+# 安源悦 · 收文件 —— QQ 桥只认文字/图片，file 段整条会被丢掉；这个插件专门把文件捡回来
+- insert:
+    - id: ayy-files
+      name: dsh-ayy-files

@@ -1,0 +1,27 @@
+{
+  "name": "dsh-ayy-files",
+  "version": "0.1.0",
+  "description": "安源悦 · 收文件：QQ 里收到的文件自动下载到 ayy-files，并告诉她路径",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "qq",
+    "files"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
