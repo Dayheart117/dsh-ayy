@@ -1,40 +1,40 @@
 {
-  "name": "dsh-ayy-desk",
-  "version": "0.2.0",
-  "description": "安源悦 · 笔记本：今天新增了什么、日记、自述、心愿单（可改状态）、技能（可编辑）、动态、时间线、搜索、收件箱、原文缓存、归档记忆、存储占用",
-  "type": "module",
-  "main": "./index.js",
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json"
-  },
-  "files": [
-    "index.js",
-    "client.js",
-    "cordis.patch.yml",
-    "locale/*.json"
-  ],
-  "keywords": [
-    "dsh-plugin",
-    "ayy",
-    "ui"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-locale"
-      ]
-    }
-  },
-  "peerDependencies": {
-    "react": "^18.2.0"
-  }
+    "name":  "dsh-ayy-desk",
+    "version":  "0.2.0",
+    "description":  "安源悦 · 她的本子（面板）：今天的新东西、日记、自述、心愿、技能、动态、搜索、收件箱、原文、归档记忆、存储",
+    "type":  "module",
+    "main":  "./index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json",
+                    "./locale/*.json":  "./locale/*.json"
+                },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "locale/*.json"
+              ],
+    "keywords":  [
+                     "dsh-plugin",
+                     "ayy",
+                     "ui"
+                 ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-runtime",
+                                              "@deepseek-ai/dsh-client-locale"
+                                          ]
+                           }
+            },
+    "peerDependencies":  {
+                             "react":  "^18.2.0"
+                         }
 }

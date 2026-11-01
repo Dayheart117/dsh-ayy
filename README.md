@@ -7,13 +7,44 @@
 
 ## 包含什么
 
+### 声音
+
 | 包 | 工具 | 做什么 |
 |---|---|---|
 | [`dsh-ayy-voice`](packages/dsh-ayy-voice) | `ayy_say` | 把文字合成她自己的声音，经 QQ 发成语音条 |
 | [`dsh-ayy-sing`](packages/dsh-ayy-sing) | `ayy_sing` | 音高序列 + 一字一音的歌词 → 合成 → 换声 → QQ 语音条 |
-| [`dsh-ayy-world`](packages/dsh-ayy-world) | `ayy_diary`、`ayy_self`、`ayy_recall` | 写日记、改写自我认知、翻某天的对话原文 |
 | [`dsh-ayy-poke`](packages/dsh-ayy-poke) | `ayy_poke` | 在 QQ 里戳一戳对方（`friend_poke` / `group_poke`） |
-| [`dsh-anyuanyue-preset`](packages/dsh-anyuanyue-preset) | — | 上面这些的组合预设，含一份具体的人格设定 |
+
+### 记忆（她自己的东西）
+
+| 包 | 工具 | 做什么 |
+|---|---|---|
+| [`dsh-ayy-world`](packages/dsh-ayy-world) | `ayy_diary`、`ayy_self`、`ayy_want`、`ayy_recall` | 写日记（一天一篇）、改写自我认知、记心愿、翻某天的对话原文 |
+| [`dsh-ayy-ledger`](packages/dsh-ayy-ledger) | `ayy_ledger` | 跨场合的短期动态 + 「还没回的话」，写进 `MEMORY.md` 让每间会话都看得到 |
+| [`dsh-ayy-note`](packages/dsh-ayy-note) | `ayy_note` | 随笔本：按主题写自己的东西（身世、小传、错题、想法），宿主直写、不过沙箱 |
+| [`dsh-ayy-skill`](packages/dsh-ayy-skill) | `ayy_skill` | 把一套做法写成她随时能加载的说明书 |
+
+### QQ 接入
+
+| 包 | 做什么 |
+|---|---|
+| [`dsh-ayy-files`](packages/dsh-ayy-files) | 收文件：QQ 里收到的文件自动下载到 `~/.dsh/ayy-files/`，告诉她路径（默认只私聊） |
+| [`dsh-ayy-notice`](packages/dsh-ayy-notice) | 通知：固定端口（9898）收 NapCat 的 HTTP 上报——戳一戳、撤回、进退群，转成一句告诉她 |
+
+> QQ 消息的收发本身由 [`dsh-qq-link`](https://github.com/Yuuyuko-uu/dsh-qq-link) 负责，不在这里。
+
+### 面板与自检
+
+| 包 | 做什么 |
+|---|---|
+| [`dsh-ayy-desk`](packages/dsh-ayy-desk) | 「她的本子」面板：今天的新东西、日记、自述、心愿、技能、动态、搜索、收件箱、原文缓存、归档记忆、存储占用 |
+| [`dsh-ayy-health`](packages/dsh-ayy-health) | 每日自检：6 小时查一遍工具注册、QQ 桥、收文件、语音服务，真故障写进她的「最近动态」 |
+
+### 预设
+
+| 包 | 做什么 |
+|---|---|
+| [`dsh-anyuanyue-preset`](packages/dsh-anyuanyue-preset) | 把她是谁、会什么、怎么说话装进一个 agent preset |
 
 预设是可选项：它把插件打包装进一个 agent preset，不装也不影响单独使用其它插件。
 

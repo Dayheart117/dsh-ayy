@@ -1,27 +1,27 @@
 {
-  "name": "dsh-ayy-notice",
-  "version": "0.1.0",
-  "description": "Anyuanyue - QQ notice bridge: listen on a fixed local port, receive NapCat HTTP reports (poke / recall / group join-leave), inject them into the bound DSH session.",
-  "type": "module",
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "cordis.patch.yml"
-  ],
-  "keywords": [
-    "dsh-plugin",
-    "ayy",
-    "qq",
-    "notice"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  }
+    "name":  "dsh-ayy-notice",
+    "version":  "0.1.0",
+    "description":  "安源悦 · 通知：固定端口收 QQ 的戳一戳/撤回/进退群，转成一句告诉她",
+    "type":  "module",
+    "main":  "index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "index.js",
+                  "cordis.patch.yml"
+              ],
+    "keywords":  [
+                     "dsh-plugin",
+                     "ayy",
+                     "qq",
+                     "notice"
+                 ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            }
 }
