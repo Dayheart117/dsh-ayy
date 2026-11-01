@@ -187,6 +187,12 @@ export function apply(ctx, config = {}) {
           description: '声线：gentle=温柔（默认），cute=可爱',
         },
         group: { type: 'string', description: '可选：要发到的 QQ 群号；不填就是私聊' },
+        confirm_group: {
+          type: 'boolean',
+          description:
+            '在群里发语音必须带 true。只有 ta 这一轮明确让你"在群里说/发群里"时才传；' +
+            '催睡、催吃饭、关心这类话一律私聊，不要用群。',
+        },
       },
       required: ['text'],
     },
@@ -198,6 +204,14 @@ export function apply(ctx, config = {}) {
       const text = String(args?.text ?? '').trim()
       if (!text) throw new Error('ayy_say 需要非空的 text')
       const style = args?.style === 'cute' ? 'cute' : cfg.defaultStyle
+      // 软限制：往群里发语音要先确认一次，防止把私聊那套照顾话甩进群。
+      if (args?.group && args?.confirm_group !== true) {
+        throw new Error(
+          '往群里发语音要先确认：只有 ta 这一轮明确让你"在群里说 / 发到群里"时才可以。' +
+            '催睡、催吃饭、关心人的话都属于私聊；群里有别人在场，一条语音会吵到所有人。' +
+            '确实要发，就再调一次并带上 confirm_group: true。',
+        );
+      }
 
       const bridge = readBridgeConfig(cfg.bridgeConfig)
       const userId = bridge['私聊QQ'] ?? bridge['私聊用户'] ?? null

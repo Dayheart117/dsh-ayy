@@ -323,6 +323,7 @@ export function apply(ctx, config = {}) {
         abc: { type: 'string', description: '可选：完整 ABC 谱子文本，给了就忽略 notes' },
         bpm: { type: 'number', description: '可选：起始速度 10–600，默认 100；中途变速在 notes 里用 @速度 表示' },
         group: { type: 'string', description: '可选：要发到的 QQ 群号；不填就是私聊' },
+        confirm_group: { type: 'boolean', description: '在群里唱歌必须带 true。只有 ta 这一轮明确让你在群里唱时才传。' },
       },
       required: ['lyrics'],
     },
@@ -361,6 +362,7 @@ export function apply(ctx, config = {}) {
       const bridge = readBridgeConfig(cfg.bridgeConfig)
       const userId = bridge['私聊QQ'] ?? bridge['私聊用户'] ?? null
       const groupId = args?.group ?? null
+      if (groupId && args?.confirm_group !== true) { throw new Error('往群里唱歌要先确认：只有 ta 这一轮明确让你在群里唱时才传 confirm_group: true。') }
       if (!groupId && !userId) throw new Error('没配置私聊 QQ（qq-bridge-config.json 里缺「私聊QQ」）')
 
       const key = readKey(cfg.apiKeyFile)
