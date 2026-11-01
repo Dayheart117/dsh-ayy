@@ -750,8 +750,8 @@ window.__ModuleLoader__.load({
 									onChange: function () { toggle(sid); }
 								}),
 								h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: '1 1 auto' } },
-									h('span', { style: s.metricValue }, String(x.workspace || '')),
-									h('span', { style: s.cardSub }, sid + ' · ' + (fmtTime(x.mtime, true) || ''))),
+									h('span', { style: s.metricValue }, String(x.title || x.workspace || '')),
+									h('span', { style: s.cardSub }, (x.title ? String(x.workspace || '') + ' · ' : '') + sid + ' · ' + (fmtTime(x.mtime, true) || ''))),
 								checked ? h(Pill, { on: true, text: t('scopePicked') }) : null);
 						}).filter(Boolean));
 					})(),

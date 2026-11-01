@@ -39,7 +39,7 @@ import { connect as netConnect } from 'node:net'
 
 export const name = 'dsh-ayy-settings'
 /** 只需要路由能力 */
-export const inject = ['webServer']
+export const inject = ['webServer', 'sessions', 'sessionTitle']
 
 const API_PREFIX = '/api/ayy-settings'
 
@@ -677,6 +677,35 @@ function scopeOverview() {
   }
 }
 
+/**
+ * 活着的会话 → 标题。照 dsh-qq-link 的做法：
+ *   ctx.sessions.list() 拿会话对象，ctx.get('sessionTitle').get(s) 拿标题快照。
+ * 盘上没打开过的会话拿不到标题（会话名存在不透明的会话日志里，不值得为它解压）。
+ */
+function liveTitles() {
+  const out = {}
+  if (!HOST) return out
+  try {
+    const list = (HOST.sessions && typeof HOST.sessions.list === 'function' ? HOST.sessions.list() : []) || []
+    const svc = HOST.get ? HOST.get('sessionTitle') : null
+    for (const s of list) {
+      if (!s) continue
+      const id = s.id || s.sessionId
+      if (!id) continue
+      try {
+        const snap = svc && typeof svc.get === 'function' ? svc.get(s) : null
+        const title = snap && snap.title ? String(snap.title) : ''
+        if (title) out[String(id)] = title
+      } catch {
+        /* 拿不到标题就用 id，不影响列表 */
+      }
+    }
+  } catch {
+    /* 服务缺席时静默降级 */
+  }
+  return out
+}
+
 /** 本机的全部会话（从 sessions/<工作区>/<会话id>/ 摸出来） */
 function allSessions() {
   const root = join(dshHome(), 'sessions')
@@ -712,7 +741,7 @@ function allSessions() {
       // 工作区目录名是 DSH 压过的（--E-Dayheart-project-xxx--）。
       // 不能把 - 换回 \：DSH 把 \ / : 都换成了 -，反推不回去，会造出假路径。
       const pretty = ws.name.replace(/^--/, '').replace(/--$/, '')
-      out.push({ id: s.name, workspace: pretty, workspaceKey: ws.name, mtime, size })
+      out.push({ id: s.name, title: titles[s.name] || '', workspace: pretty, workspaceKey: ws.name, mtime, size })
     }
   }
   out.sort((a, b) => b.mtime - a.mtime)
@@ -913,7 +942,10 @@ function saveScopeConfig(body) {
 
 // ── 路由 ───────────────────────────────────────────────────────────────────
 
+let HOST = null
+
 export function apply(ctx) {
+  HOST = ctx
   const urlOf = (req) => new URL(req.url || '/', 'http://localhost')
 
   const routes = [
