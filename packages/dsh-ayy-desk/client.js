@@ -13,6 +13,7 @@ window.__ModuleLoader__.load({
 			tabOldDiary: '旧日记',
 			tabSelf: '自我认知',
 			tabWants: '心愿单',
+			tabLedger: '动态',
 			tabSkills: '技能',
 			tabTimeline: '时间线',
 			loading: '正在读…',
@@ -25,6 +26,10 @@ window.__ModuleLoader__.load({
 			emptyWants: '心愿单还是空的。',
 			emptySkills: '她还没写过技能。',
 			emptyTimeline: '还没有任何记录。',
+			emptyLedger: '动态还是空的。',
+			recentLabel: '最近动态（每轮注入所有会话）',
+			monthsLabel: '月度流水',
+			pickMonth: '左边选一个月的流水。',
 			dir: '目录',
 			pickOne: '左边选一篇。',
 			kDiary: '日记',
@@ -43,6 +48,7 @@ window.__ModuleLoader__.load({
 			tabSelf: 'Self',
 			tabWants: 'Wishes',
 			tabSkills: 'Skills',
+			tabLedger: 'Activity',
 			tabTimeline: 'Timeline',
 			loading: 'Reading…',
 			error: 'Could not read.',
@@ -164,7 +170,8 @@ window.__ModuleLoader__.load({
 
 			const tabs = [
 				['diary', t('tabDiary')], ['oldDiary', t('tabOldDiary')], ['self', t('tabSelf')],
-				['wants', t('tabWants')], ['skills', t('tabSkills')], ['timeline', t('tabTimeline')]
+				['wants', t('tabWants')], ['ledger', t('tabLedger')], ['skills', t('tabSkills')],
+				['timeline', t('tabTimeline')]
 			];
 			const tabBtn = (pair) => h('button', {
 				key: pair[0],
@@ -223,6 +230,21 @@ window.__ModuleLoader__.load({
 					overview.wants && overview.wants.exists
 						? h(Content, { t, rel: 'wants.md' })
 						: h('p', { style: s.status }, t('emptyWants')));
+			} else if (tab === 'ledger') {
+				const recent = arr(overview.ledger && overview.ledger.recent);
+				const months = arr(overview.ledger && overview.ledger.months);
+				const monthItems = months.map((m) => ({ key: m.rel, label: m.name, sub: m.lines + ' 条 · ' + (m.size / 1024).toFixed(1) + ' KB' }));
+				body = h('div', { style: s.split },
+					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0 } },
+						h('div', { style: s.pane },
+							h('p', { style: s.itemMeta }, t('recentLabel')),
+							recent.length
+								? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' } },
+									recent.map((line, i) => h('div', { key: 'r' + i, style: s.itemName }, line)))
+								: h('p', { style: s.status }, t('emptyLedger'))),
+						h('p', { style: s.itemMeta }, t('monthsLabel')),
+						h(List, { items: monthItems, selected: pick.ledgerMonth, onPick: (k) => set({ ledgerMonth: k }), emptyText: t('emptyLedger') })),
+					h(Content, { t, rel: pick.ledgerMonth, empty: t('pickMonth') }));
 			} else if (tab === 'skills') {
 				body = h('div', { style: s.split },
 					h(List, { items: skillItems, selected: pick.skill, onPick: (k) => set({ skill: k }), emptyText: t('emptySkills') }),

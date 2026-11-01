@@ -76,7 +76,7 @@ function listDir(dirName, ext = '.md') {
 function allowedRel(rel) {
   const r = String(rel || '').replace(/\\/g, '/')
   if (r === 'who-i-am.md' || r === 'wants.md') return true
-  if (!r.includes('..') && /^(diary|diary-history|who-i-am-history)\/[^/]+\.md$/.test(r)) return true
+  if (!r.includes('..') && /^(diary|diary-history|who-i-am-history|ledger)\/[^/]+\.md$/.test(r)) return true
   return false
 }
 
@@ -125,6 +125,43 @@ function skillFile(name) {
   if (!n || /[\\/:*?"<>|]/.test(n) || n.includes('..') || n.startsWith('.')) return null
   const file = join(skillsDir(), n, 'SKILL.md')
   return existsSync(file) ? file : null
+}
+
+/** 最近动态：直接读 MEMORY.md 里那一节（core-memory 每轮注入的就是它） */
+function ledgerRecent() {
+  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+  const file = join(dshHome, 'memory', 'MEMORY.md')
+  const text = readText(file)
+  const idx = text.indexOf('## 最近动态')
+  if (idx < 0) return []
+  const after = text.slice(idx + '## 最近动态'.length)
+  const next = after.search(/\n## /)
+  const body = next < 0 ? after : after.slice(0, next)
+  return body
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^-\s+/.test(l))
+    .map((l) => l.replace(/^-\s*/, ''))
+}
+
+/** 月度流水：被挤出窗口的那些 */
+function ledgerMonths() {
+  const dir = join(personasDir(), 'ledger')
+  if (!existsSync(dir)) return []
+  const out = []
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.md')) continue
+    const full = join(dir, name)
+    let st
+    try {
+      st = statSync(full)
+    } catch {
+      continue
+    }
+    const lines = readText(full).split('\n').filter((l) => /^-\s+/.test(l)).length
+    out.push({ name, rel: `ledger/${name}`, lines, size: st.size, mtime: st.mtimeMs })
+  }
+  return out.sort((a, b) => b.mtime - a.mtime)
 }
 
 /** 成长时间线：日记 / 旧日记 / 自述 / 技能 / 心愿单，按修改时间倒序 */
@@ -185,6 +222,7 @@ function overview() {
       chars: readText(join(personasDir(), 'wants.md')).trim().length,
     },
     skills,
+    ledger: { recent: ledgerRecent(), months: ledgerMonths() },
     timeline: timeline(diaries, skills),
   }
 }
