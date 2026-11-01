@@ -12,7 +12,7 @@
  *   { "会话": ["session-xxx", "session-yyy"], "人格文件": "...", "记忆文件": "..." }
  * 留空 = 一个都不注入（宁可少注入，也不要外溢）。
  */
-import { existsSync, readFileSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync, watch } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -151,12 +151,38 @@ export function apply(ctx) {
     }
   }
 
+  readCfg() // 顺便把配置文件建出来，才 watch 得到
   tick()
   const timer = setInterval(tick, 10 * 1000)
   if (typeof timer.unref === 'function') timer.unref()
 
+  // 面板一保存就立刻重新检查（操作系统文件通知，不是轮询）。
+  // 这样勾了白名单不用等最多 10 秒；10 秒那个 tick 只留给"发现新会话"。
+  let watcher = null
+  let debounce = null
+  try {
+    watcher = watch(CFG, { persistent: false }, () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(() => {
+        debounce = null
+        log('配置文件变了，立刻重新检查')
+        tick()
+      }, 250)
+      if (debounce && typeof debounce.unref === 'function') debounce.unref()
+    })
+    if (watcher && typeof watcher.unref === 'function') watcher.unref()
+  } catch (error) {
+    log(`文件监听挂不上（退回 10 秒轮询）：${error && error.message}`)
+  }
+
   ctx.effect(() => () => {
     clearInterval(timer)
+    if (debounce) clearTimeout(debounce)
+    try {
+      if (watcher) watcher.close()
+    } catch {
+      /* 关不掉也无所谓，进程退出就没了 */
+    }
     for (const sid of [...MOUNTED.keys()]) unmount(sid)
     log('已卸载（全部摘掉）')
   })
