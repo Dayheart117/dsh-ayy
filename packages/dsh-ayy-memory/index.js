@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 
 export const name = 'dsh-ayy-memory'
 export const inject = ['tools']
@@ -67,6 +68,30 @@ function atomicWrite(path, body) {
   const tmp = path + '.tmp-' + Date.now()
   writeFileSync(tmp, body, 'utf8')
   renameSync(tmp, path)
+}
+
+/**
+ * 写完之后立刻进 git（事件驱动，不轮询）。
+ * 只同步这一份文件，快（几十毫秒）；失败不影响已经写好的内容。
+ */
+function commitToRepo(message) {
+  const repo = 'E:\\AI\\her-memory'
+  // ⚠️ 测试模式（DSH_HOME 被指向临时目录）绝不碰真仓库——
+  //    踩过一次：隔离测试把假的 MEMORY.md 提交进了真仓库。
+  if (process.env.DSH_HOME) return { ok: false, reason: 'test-mode-skip' }
+  try {
+    if (!existsSync(join(repo, '.git'))) return { ok: false, reason: 'no-repo' }
+    copyFileSync(FILE, join(repo, 'memory', 'MEMORY.md'))
+    execFileSync('git', ['-C', repo, 'add', 'memory/MEMORY.md'], { stdio: 'ignore', timeout: 20000 })
+    execFileSync('git', ['-C', repo, '-c', 'core.autocrlf=false', 'commit', '-q', '-m', message], {
+      stdio: 'ignore',
+      timeout: 20000,
+    })
+    return { ok: true }
+  } catch (error) {
+    // 没有变化时 git commit 会返回非 0，这不算失败
+    return { ok: false, reason: String((error && error.message) || error).slice(0, 120) }
+  }
 }
 
 /** 把正文按 `## ` 切成 section，返回 [{name, start, end}]（end 不含） */
@@ -178,11 +203,13 @@ export function apply(ctx) {
 
       const keep = backupBeforeWrite(body) // ⭐ 改前备份
       atomicWrite(FILE, next)
+      const committed = commitToRepo(`memory: ${sec.name} ${action === 'replace' ? '改写' : '追加'} (${stamp()})`)
       return {
         ok: true,
         action,
         section: sec.name,
         backup: keep,
+        git: committed.ok ? '已提交' : `未提交（${committed.reason}）`,
         bytesBefore: Buffer.byteLength(body, 'utf8'),
         bytesAfter: Buffer.byteLength(next, 'utf8'),
       }
