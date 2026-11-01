@@ -655,6 +655,13 @@ function scopeOverview() {
   const st = statOf(scopeCfg())
   const logSt = statOf(scopeLog())
   const sessions = Array.isArray(cfg['会话']) ? cfg['会话'].map(String).filter(Boolean) : []
+  const bindings = bridgeBindings()
+  const boundIds = new Set(bindings.map((b) => b.session).filter(Boolean))
+  const picked = new Set(sessions)
+  // 本机所有会话里，既不在白名单、也不是 QQ 绑定的那些——给"手动加一个会话"用
+  const available = allSessions()
+    .filter((s) => !picked.has(s.id) && !boundIds.has(s.id))
+    .slice(0, 200)
   return {
     path: scopeCfg(),
     exists: !!st,
@@ -662,11 +669,51 @@ function scopeOverview() {
     size: st ? st.size : 0,
     sessions,
     mounted: parseMountLog(readTailLines(scopeLog(), 50)),
-    bindings: bridgeBindings(),
+    bindings,
+    available,
     logPath: scopeLog(),
     logExists: !!logSt,
     logMtime: logSt ? logSt.mtimeMs : 0,
   }
+}
+
+/** 本机的全部会话（从 sessions/<工作区>/<会话id>/ 摸出来） */
+function allSessions() {
+  const root = join(dshHome(), 'sessions')
+  const out = []
+  let workspaces = []
+  try {
+    workspaces = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory())
+  } catch {
+    return out
+  }
+  for (const ws of workspaces) {
+    const wsDir = join(root, ws.name)
+    let sess = []
+    try {
+      sess = readdirSync(wsDir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name.startsWith('session-'))
+    } catch {
+      continue
+    }
+    for (const s of sess) {
+      const dir = join(wsDir, s.name)
+      let mtime = 0
+      let size = 0
+      for (const f of ['session.v4.jsonl.zstd', 'session.v4.jsonl']) {
+        const st = statOf(join(dir, f))
+        if (st) {
+          mtime = st.mtimeMs
+          size = st.size
+          break
+        }
+      }
+      // 工作区目录名是 DSH 压过的（--E-Dayheart-project-xxx--），还原成人看得懂的
+      const pretty = ws.name.replace(/^--/, '').replace(/--$/, '').replace(/-/g, '\\')
+      out.push({ id: s.name, workspace: pretty, workspaceKey: ws.name, mtime, size })
+    }
+  }
+  out.sort((a, b) => b.mtime - a.mtime)
+  return out
 }
 
 // ── 状态 ───────────────────────────────────────────────────────────────────

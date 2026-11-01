@@ -13,6 +13,11 @@ window.__ModuleLoader__.load({
 			tabSelf: '她是谁',
 			tabSenses: '感官',
 			tabScope: '注入范围',
+		scopeMoreTitle: '其它会话（手选）',
+		scopeMoreHint: '这些是本机已有的会话（不含 QQ 桥绑定的）。勾上再点上面的保存，它们下一回合起就能看到她的记忆和人格。',
+		scopeMoreEmpty: '没有其它会话了。',
+		scopePicked: '已选',
+		scopeMoreSaveNote: '要保存才生效。',
 			tabStatus: '状态',
 			loading: '正在读…',
 			error: '读不出来了。',
@@ -721,6 +726,31 @@ window.__ModuleLoader__.load({
 					h('div', { style: s.row },
 						h('button', { type: 'button', style: s.primary, disabled: busy, onClick: save }, t('scopeSave'))),
 					h('p', { style: s.cardSub }, (scope && scope.path ? scope.path : '') + ' · ' + (fmtTime(scope && scope.mtime, true) || t('never')))),
+				// 手加：本机其它会话（不在 QQ 桥绑定里的）
+				h('div', { style: s.card },
+					h('p', { style: s.cardTitle }, t('scopeMoreTitle')),
+					h('p', { style: s.cardSub }, t('scopeMoreHint')),
+					(function () {
+						const list = arr(scope && scope.available);
+						if (!list.length) return h('p', { style: s.cardSub }, t('scopeMoreEmpty'));
+						return h('div', { style: s.stack }, list.map(function (x, i) {
+							const sid = String(x && x.id || '');
+							if (!sid) return null;
+							const checked = selected.indexOf(sid) >= 0;
+							return h('label', { key: sid, style: s.checkRow },
+								h('input', {
+									type: 'checkbox',
+									style: s.checkBox,
+									checked: checked,
+									onChange: function () { toggle(sid); }
+								}),
+								h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: '1 1 auto' } },
+									h('span', { style: s.metricValue }, String(x.workspace || '')),
+									h('span', { style: s.cardSub }, sid + ' · ' + (fmtTime(x.mtime, true) || ''))),
+								checked ? h(Pill, { on: true, text: t('scopePicked') }) : null);
+						}).filter(Boolean));
+					})(),
+					h('p', { style: s.cardSub }, t('scopeMoreSaveNote'))),
 				h('p', { style: s.cardSub }, t('scopeEmptyBindings') + ' ' + t('scopeHint')));
 		}
 
