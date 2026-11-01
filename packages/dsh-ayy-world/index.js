@@ -194,6 +194,12 @@ export function apply(ctx) {
         const reason = String(args?.reason || '').trim()
         const head = reason ? `<!-- 改动原因：${reason} -->\n` : ''
         writeText(join(SELF_HISTORY, `${stamp}.md`), head + old + '\n')
+        // 留痕：标一下这一版是谁写的，设置面板靠它区分「使用者改的」和「她自己改的」
+        try {
+          writeText(join(SELF_HISTORY, `${stamp}.source`), '她自己\n')
+        } catch {
+          /* 留痕失败不影响正文写入 */
+        }
       }
       writeText(SELF_FILE, content + '\n')
       return {

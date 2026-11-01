@@ -4,7 +4,7 @@
       config:
         id: anyuanyue
         name: 陪伴人格（模板）
-        description: 一个陪伴型 agent 的编排模板：人格 + 说话 / 唱歌 / 记忆 / 戳一戳。人格正文留成占位，换成你自己的。
+        description: 陪伴型 agent 的编排模板：人格 + 说话 / 唱歌 / 记忆 / 戳一戳 / 收文件 / 通知。人格正文不写死——每轮从 ~/.dsh/personas/who-i-am.md 现读，这里只留 522 字节保底。
         order: 10
         plugins:
           - id: persona
