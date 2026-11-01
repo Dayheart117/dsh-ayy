@@ -16,8 +16,8 @@ export const name = 'dsh-ayy-memory'
 export const inject = ['tools']
 
 const HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
-const FILE = join(HOME, 'memory', 'MEMORY.md')
-const HIST = join(HOME, 'memory', '.history')
+const FILE = join(HOME, 'personas', 'her-memory.md')
+const HIST = join(HOME, 'personas', 'memory-history')
 const KEEP = 60 // 最多留多少个改前版本
 
 const readText = (p) => {
@@ -81,8 +81,8 @@ function commitToRepo(message) {
   if (process.env.DSH_HOME) return { ok: false, reason: 'test-mode-skip' }
   try {
     if (!existsSync(join(repo, '.git'))) return { ok: false, reason: 'no-repo' }
-    copyFileSync(FILE, join(repo, 'memory', 'MEMORY.md'))
-    execFileSync('git', ['-C', repo, 'add', 'memory/MEMORY.md'], { stdio: 'ignore', timeout: 20000 })
+    copyFileSync(FILE, join(repo, 'personas', 'her-memory.md'))
+    execFileSync('git', ['-C', repo, 'add', 'personas/her-memory.md'], { stdio: 'ignore', timeout: 20000 })
     execFileSync('git', ['-C', repo, '-c', 'core.autocrlf=false', 'commit', '-q', '-m', message], {
       stdio: 'ignore',
       timeout: 20000,

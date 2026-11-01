@@ -20,8 +20,8 @@ export const inject = ['tools']
 
 const HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const MEMORY_DIR = join(HOME, 'memory')
-const MEMORY_FILE = join(MEMORY_DIR, 'MEMORY.md')
-const BACKUP_FILE = join(MEMORY_DIR, 'MEMORY.md.bak')
+const MEMORY_FILE = join(HOME, 'personas', 'her-memory.md')
+const BACKUP_FILE = join(HOME, 'personas', 'her-memory.md.bak')
 const INDEX_FILE = join(MEMORY_DIR, 'index.json')
 const NOTES_DIR = join(MEMORY_DIR, 'notes')
 const LEDGER_DIR = join(HOME, 'personas', 'ledger')
