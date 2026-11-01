@@ -82,6 +82,18 @@ function splitSections(body) {
   return out
 }
 
+/**
+ * 命中时只回"那一段"，不是整节。
+ * 为什么：append 上去的内容如果没带 `## 小标题`，它会并进上一节；
+ * 如果整节吐回去，一条补充说明会拖着几十行一起回来。
+ */
+function splitParagraphs(text) {
+  return text
+    .split(/\n\s*\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 const out = () => ({
   schema: { type: 'object', properties: {}, additionalProperties: true },
   render: (_a, val) => [{ type: 'text', text: typeof val === 'string' ? val : JSON.stringify(val, null, 1) }],
@@ -117,7 +129,7 @@ export function apply(ctx) {
         return { count: items.length, dir: NOTES_DIR, notes: items.length ? items : ['（还没有本子）'] }
       }
 
-      // ── 搜索：不读整本，只返回命中的节 ──────────────────────────────
+      // ── 搜索：只回命中的那一段（不是整节）───────────────────────────
       const kw = String(args?.search || '').trim()
       if (kw) {
         const names = args?.name ? [normalizeName(args.name)] : listNotes().map((n) => n.name)
@@ -127,11 +139,16 @@ export function apply(ctx) {
           if (!body.trim()) continue
           for (const section of splitSections(body)) {
             if (!section.text.includes(kw)) continue
-            hits.push({
-              note: n,
-              heading: section.heading,
-              text: section.text.length > 600 ? section.text.slice(0, 600) + '…' : section.text,
-            })
+            // 节内再按空行切段：只把命中的那几段带回来，前面捎上节标题做定位
+            const paras = splitParagraphs(section.text).filter((p) => p.includes(kw))
+            for (const p of paras.slice(0, 3)) {
+              hits.push({
+                note: n,
+                heading: section.heading,
+                text: p.length > 500 ? p.slice(0, 500) + '…' : p,
+              })
+              if (hits.length >= 20) break
+            }
             if (hits.length >= 20) break
           }
           if (hits.length >= 20) break
