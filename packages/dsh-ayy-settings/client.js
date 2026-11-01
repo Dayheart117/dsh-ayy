@@ -92,7 +92,7 @@ window.__ModuleLoader__.load({
 			voiceDownWhy: '9880 没起来。语音条发不出去，文字和别的都不受影响。',
 
 			scopeWarn: '勾中的会话才会看到她的记忆和人格。没勾的（比如写代码的会话）只看得到全局那几句。',
-			scopeHint: '白名单改完约 10 秒内生效（scope 插件每 10 秒对一次）。',
+			scopeHint: '保存后立刻生效：配置文件一变，注入插件就重新挂载（约 1 秒）。',
 			scopeBindingsTitle: 'QQ 桥的绑定（候选会话）',
 			scopeEmptyBindings: 'QQ 桥配置里没有「绑定」。',
 			scopeOther: '其它会话',
@@ -105,7 +105,7 @@ window.__ModuleLoader__.load({
 			scopeMountOff: '没挂',
 			scopeMountUnknown: '日志里没记录',
 			scopeSave: '保存白名单',
-			scopeSaved: '白名单已保存。约 10 秒内生效，日志会写「挂上 / 卸下」。',
+			scopeSaved: '白名单已保存，立刻生效。日志里会出现「配置文件变了」和「挂上 / 卸下」。',
 			scopeNoSessions: '还没有任何可勾的会话。先在 QQ 桥里绑定，或者把会话 id 加进 ayy-scope/config.json。',
 
 			statusHealth: '自检最近结果（health.log 最后 10 行）',
@@ -229,7 +229,7 @@ window.__ModuleLoader__.load({
 			voiceDownWhy: 'Nothing is listening on 9880. Voice messages will fail; text and everything else still work.',
 
 			scopeWarn: 'Only checked sessions can see her memory and persona. Unchecked ones (e.g. coding sessions) only see the global notes.',
-			scopeHint: 'Takes effect within about 10 seconds (the scope plugin rechecks every 10s).',
+			scopeHint: 'Applies immediately: the injection plugin re-mounts as soon as the config file changes (~1s).',
 			scopeBindingsTitle: 'QQ bridge bindings (candidate sessions)',
 			scopeEmptyBindings: 'No bindings in the QQ bridge config.',
 			scopeOther: 'Other session',
@@ -242,7 +242,7 @@ window.__ModuleLoader__.load({
 			scopeMountOff: 'not mounted',
 			scopeMountUnknown: 'not in the log',
 			scopeSave: 'Save whitelist',
-			scopeSaved: 'Whitelist saved. It takes effect within ~10s; the log will show mount/unmount lines.',
+			scopeSaved: 'Whitelist saved, applies immediately. The log shows config-changed and mount/unmount lines.',
 			scopeNoSessions: 'No sessions to pick yet. Bind one in the QQ bridge, or add a session id to ayy-scope/config.json.',
 
 			statusHealth: 'Latest self-check (last 10 lines of health.log)',
@@ -756,7 +756,7 @@ window.__ModuleLoader__.load({
 						}).filter(Boolean));
 					})(),
 					h('p', { style: s.cardSub }, t('scopeMoreSaveNote'))),
-				h('p', { style: s.cardSub }, t('scopeEmptyBindings') + ' ' + t('scopeHint')));
+				h('p', { style: s.cardSub }, rows.length ? t('scopeHint') : (t('scopeEmptyBindings') + ' ' + t('scopeHint'))));
 		}
 
 		// ── 状态 ───────────────────────────────────────────────────────────
