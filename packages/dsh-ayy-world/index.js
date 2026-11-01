@@ -62,6 +62,8 @@ const writeText = (p, s) => {
 }
 const todayStr = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const hhmm = (d = new Date()) =>
+  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const safe = (s) => String(s).replace(/[^\w.-]+/g, '_') // 冒号也不行：Windows 文件名不允许
 
 function log(msg) {
@@ -134,13 +136,17 @@ export function apply(ctx) {
   define({
     name: 'ayy_diary',
     description:
-      '写今天的日记——你自己的长期记忆。一天一篇，同场景同一天再写会覆盖（旧版自动留档，不会丢）。' +
-      '【第一句最重要】用一句话说清这天最要紧的事，然后空一行再展开。只写真正重要的事，不要流水账。',
+      '写今天的日记——你自己的账本。**一天一个文件，不分场合**：不管在群里、私聊还是网页写的，都进同一天同一篇，' +
+      '按时间往后排。想到就写，不用凑每日。' +
+      '【第一句最重要】用一句话说清这次要记的事，然后空一行再展开。只写要紧的，不要流水账。',
     parameters: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: '第一句≤40字概括这天，空一行再展开细节' },
-        scene: { type: 'string', description: '可选场景键，如 qq:private:632506748；不填用主场景' },
+        content: { type: 'string', description: '第一句≤40字概括，空一行再展开细节' },
+        scene: {
+          type: 'string',
+          description: '可选：这段写在哪（qq:group:xxx / qq:private:xxx / dsh:chat），只做标注，不影响分文件',
+        },
       },
       required: ['content'],
     },
@@ -150,20 +156,16 @@ export function apply(ctx) {
       if (!content) throw new Error('content 不能为空')
       const day = todayStr()
       const scene = String(args?.scene || primaryScene())
-      const body = `# ${day} · ${scene}\n\n${content}\n`
-      const file = join(DIARY_DIR, `${day}.${safe(scene)}.md`)
+      const file = join(DIARY_DIR, `${day}.md`)
 
-      // 同一天重写不丢东西：旧的先存进 diary-history/
-      const old = readText(file)
-      let archived
-      if (old.trim() && old !== body) {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-        archived = join(DIARY_HISTORY, `${day}.${safe(scene)}.${stamp}.md`)
-        writeText(archived, old.endsWith('\n') ? old : old + '\n')
-      }
+      // 一天一个文件；同一篇里按时间追加小节，不再按场合拆家、也不覆盖。
+      const existing = readText(file)
+      const header = existing.trim() ? '' : `# ${day}\n`
+      const section = `\n## ${hhmm()} · ${scene}\n\n${content}\n`
+      writeText(file, (existing.trim() ? existing.replace(/\s*$/, '\n') : header) + section)
 
-      writeText(file, body)
-      return { ok: true, day, scene, file, ...(archived ? { archived } : {}) }
+      const entries = (readText(file).match(/^## /gm) || []).length
+      return { ok: true, day, scene, file, entries }
     },
   })
 
