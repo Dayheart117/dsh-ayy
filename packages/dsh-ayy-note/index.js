@@ -58,6 +58,30 @@ function listNotes() {
   return out.sort((a, b) => b.mtime - a.mtime)
 }
 
+/** 按 `## ` 标题切节；没有标题就整篇算一节 */
+function splitSections(body) {
+  const lines = body.split('\n')
+  const out = []
+  let heading = '(开头)'
+  let buf = []
+  const flush = () => {
+    const text = buf.join('\n').trim()
+    if (text) out.push({ heading, text })
+  }
+  for (const line of lines) {
+    const m = /^##\s+(.*)$/.exec(line)
+    if (m) {
+      flush()
+      heading = m[1].trim()
+      buf = [line]
+    } else {
+      buf.push(line)
+    }
+  }
+  flush()
+  return out
+}
+
 const out = () => ({
   schema: { type: 'object', properties: {}, additionalProperties: true },
   render: (_a, val) => [{ type: 'text', text: typeof val === 'string' ? val : JSON.stringify(val, null, 1) }],
@@ -69,13 +93,20 @@ export function apply(ctx) {
     description:
       '你自己的本子——按主题存任何想长期留着的文字：自己的身世、某个人的小传、错题整理、一个想法、一份清单。\n' +
       '跟日记不一样：日记按天写，这本子按主题写，想改就改（旧版自动留档）。\n' +
-      '用法：传 name + content 就是写（同名会覆盖，但旧版存进 notes-history）；只传 name 是读回来；只传 list=true 看有哪些本子。\n' +
+      '用法：\n' +
+      '· 传 name + content = 整本重写（旧版存进 notes-history）；\n' +
+      '· 传 name + append = 往末尾追加一段（**加一条就用这个，别整本重写**，又快又不会改坏前文）；\n' +
+      '· 只传 name = 读整本回来；\n' +
+      '· 传 search = 按关键词找，只返回命中的那几节（本子大了就用它，别整本读）；\n' +
+      '· list=true = 看有哪些本子。\n' +
       '注意：短期动态（刚发生的事）用 ayy_ledger，不要往这里塞。',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string', description: '本子名，如 backstory、错题、某某小传；同名覆盖' },
-        content: { type: 'string', description: '正文（markdown）。给了就写，不给就是读' },
+        content: { type: 'string', description: '正文（markdown）。给了就是整本重写' },
+        append: { type: 'string', description: '要追加到本子末尾的一段；本子不存在就新建。只加一条时用它' },
+        search: { type: 'string', description: '关键词。给了就只返回命中的节（可配合 name 限定一本；不给 name 就搜全部本子）' },
         list: { type: 'boolean', description: '只看有哪些本子，不读不写' },
       },
     },
@@ -86,13 +117,47 @@ export function apply(ctx) {
         return { count: items.length, dir: NOTES_DIR, notes: items.length ? items : ['（还没有本子）'] }
       }
 
+      // ── 搜索：不读整本，只返回命中的节 ──────────────────────────────
+      const kw = String(args?.search || '').trim()
+      if (kw) {
+        const names = args?.name ? [normalizeName(args.name)] : listNotes().map((n) => n.name)
+        const hits = []
+        for (const n of names) {
+          const body = readText(fileOf(n))
+          if (!body.trim()) continue
+          for (const section of splitSections(body)) {
+            if (!section.text.includes(kw)) continue
+            hits.push({
+              note: n,
+              heading: section.heading,
+              text: section.text.length > 600 ? section.text.slice(0, 600) + '…' : section.text,
+            })
+            if (hits.length >= 20) break
+          }
+          if (hits.length >= 20) break
+        }
+        return { keyword: kw, count: hits.length, hits: hits.length ? hits : '（没找到，换个词试试）' }
+      }
+
       const name = normalizeName(args?.name)
       const file = fileOf(name)
 
-      if (args?.content === undefined) {
+      // ── 只读 ────────────────────────────────────────────────────────
+      if (args?.content === undefined && args?.append === undefined) {
         const body = readText(file)
         if (!body.trim()) return { name, exists: false, content: `（还没有「${name}」这本）` }
         return { name, exists: true, file, content: body }
+      }
+
+      // ── 追加：只加一段，不备份（没丢东西），也不重写前文 ────────────
+      if (args?.append !== undefined && args?.content === undefined) {
+        const add = String(args.append || '').trim()
+        if (!add) throw new Error('append 不能为空')
+        const old = readText(file)
+        const sep = !old.trim() ? '' : old.endsWith('\n') ? '' : '\n'
+        const next = old.trim() ? old + sep + '\n' + add + '\n' : add + '\n'
+        writeText(file, next)
+        return { ok: true, mode: 'append', name, file, addedChars: add.length, totalChars: next.length }
       }
 
       const content = String(args.content || '').trim()
