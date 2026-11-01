@@ -1,0 +1,16 @@
+[Unit]
+Description=Feiyu TTS daemon (CosyVoice3 kept warm)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/e/AI/feiyu-voice/server
+Environment=PYTHONIOENCODING=utf-8
+Environment=HF_HUB_OFFLINE=1
+ExecStart=/bin/bash /mnt/e/AI/feiyu-voice/server/scripts/daemon-run.sh
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
