@@ -102,34 +102,68 @@ function stampHuman() {
 }
 
 /**
- * 这条是从哪来的。
- * 优先从执行上下文里取会话（版本不同字段名不同，逐个试），取不到再用她填的 scene。
- * 都拿不到就写 unknown —— 宁可标"不知道"，也不编一个像样的来源。
+ * 会话 id → 人看得懂的名字。
+ * 先从 QQ 桥的绑定表里查（那里有群号/好友号/称呼），查不到再退回短 id。
+ * 溯源要的是"哪一场"，不是一串 uuid。
  */
+function resolveScene(sid, ctxObj) {
+  const s = String(sid || '').trim()
+  if (!s) return { label: 'unknown', id: '' }
+  // 执行上下文里如果直接带了标题，最好
+  try {
+    const t = ctxObj && (ctxObj.title || (ctxObj.session && ctxObj.session.title))
+    if (typeof t === 'string' && t.trim()) return { label: t.trim(), id: s }
+  } catch {
+    /* 没有就算了 */
+  }
+  // 查 QQ 桥的绑定
+  try {
+    const cfg = JSON.parse(readFileSync(join(HOME, 'qq-bridge-config.json'), 'utf8').replace(/^\uFEFF/, ''))
+    const list = Array.isArray(cfg['绑定']) ? cfg['绑定'] : []
+    for (const b of list) {
+      if (!b || String(b['会话'] || '') !== s) continue
+      const kind = String(b['类型'] || '') === '群' ? '群' : '私聊'
+      const num = String(b['号码'] || '')
+      const name = String(b['称呼'] || '').trim()
+      return { label: `${kind} ${num}${name ? '（' + name + '）' : ''}`, id: s }
+    }
+  } catch {
+    /* 桥配置读不到就退回短 id */
+  }
+  return { label: '会话 ' + s.slice(-8), id: s }
+}
+
+/** 这条是从哪来的：优先自动取会话，再退回她填的 scene，都没有就 unknown */
 function describeSource(args, execCtx) {
-  const tried = []
   const ctxs = [execCtx, execCtx && execCtx.context, execCtx && execCtx.session, args]
   for (const c of ctxs) {
     if (!c || typeof c !== 'object') continue
     for (const k of ['sessionId', 'sessionKey', 'sid', 'id', 'key']) {
       const v = c[k]
-      if (typeof v === 'string' && /^session-/.test(v)) return { value: v, from: 'auto:' + k, line: srcLine(v) }
+      if (typeof v === 'string' && /^session-/.test(v)) {
+        const r = resolveScene(v, c)
+        return { value: r.label, from: 'auto:' + k, line: srcLine(r.label, r.id) }
+      }
     }
     if (c.session && typeof c.session === 'object') {
       for (const k of ['id', 'sessionId', 'key']) {
         const v = c.session[k]
-        if (typeof v === 'string' && v.trim()) return { value: v, from: 'auto:session.' + k, line: srcLine(v) }
+        if (typeof v === 'string' && v.trim()) {
+          const r = resolveScene(v, c.session)
+          return { value: r.label, from: 'auto:session.' + k, line: srcLine(r.label, r.id) }
+        }
       }
     }
-    tried.push(Object.keys(c).join(','))
   }
   const scene = String((args && args.scene) || '').trim()
-  if (scene) return { value: scene, from: 'arg:scene', line: srcLine(scene) }
-  return { value: 'unknown', from: 'none', line: srcLine('unknown') }
+  if (scene) return { value: scene, from: 'arg:scene', line: srcLine(scene, '') }
+  return { value: 'unknown', from: 'none', line: srcLine('unknown', '') }
 }
 
-function srcLine(value) {
-  return `<!-- src: ${value} · ${stampHuman()} -->`
+/** 一行来源：人看得懂的在前面，id 兜在后面，方便按 id 精确筛 */
+function srcLine(label, sid) {
+  const tail = sid ? ` · ${sid}` : ''
+  return `<!-- src: ${label} · ${stampHuman()}${tail} -->`
 }
 
 const out = () => ({
