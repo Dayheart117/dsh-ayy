@@ -142,7 +142,8 @@ function describeSource(args, execCtx) {
       const v = c[k]
       if (typeof v === 'string' && /^session-/.test(v)) {
         const r = resolveScene(v, c)
-        return { value: r.label, from: 'auto:' + k, line: srcLine(r.label, r.id) }
+        const sp = String((args && args.speaker) || '').trim()
+        return { value: r.label, from: 'auto:' + k, line: srcLine(r.label, r.id, sp) }
       }
     }
     if (c.session && typeof c.session === 'object') {
@@ -150,20 +151,22 @@ function describeSource(args, execCtx) {
         const v = c.session[k]
         if (typeof v === 'string' && v.trim()) {
           const r = resolveScene(v, c.session)
-          return { value: r.label, from: 'auto:session.' + k, line: srcLine(r.label, r.id) }
+          const sp = String((args && args.speaker) || '').trim()
+          return { value: r.label, from: 'auto:session.' + k, line: srcLine(r.label, r.id, sp) }
         }
       }
     }
   }
   const scene = String((args && args.scene) || '').trim()
-  if (scene) return { value: scene, from: 'arg:scene', line: srcLine(scene, '') }
+  if (scene) return { value: scene, from: 'arg:scene', line: srcLine(scene, '', String((args && args.speaker) || '').trim()) }
   return { value: 'unknown', from: 'none', line: srcLine('unknown', '') }
 }
 
 /** 一行来源：人看得懂的在前面，id 兜在后面，方便按 id 精确筛 */
-function srcLine(label, sid) {
+function srcLine(label, sid, speaker) {
   const tail = sid ? ` · ${sid}` : ''
-  return `<!-- src: ${label} · ${stampHuman()}${tail} -->`
+  const who = speaker ? ` · 说的人 ${speaker}` : ''
+  return `<!-- src: ${label} · ${stampHuman()}${tail}${who} -->`
 }
 
 const out = () => ({
@@ -195,6 +198,7 @@ export function apply(ctx) {
         search: { type: 'string', description: '关键词。给了就只返回命中的节（可配合 name 限定一本；不给 name 就搜全部本子）' },
         source: { type: 'string', description: '只搜某一来源的条目（比如「qq:group:524271081」或「2026-11-02」）' },
         scene: { type: 'string', description: '这条是从哪来的（自动取不到时填，比如「qq:group:524271081」或「老群」）' },
+        speaker: { type: 'string', description: '群里是**谁**说的：昵称(QQ号)，例如「锤子(1610827876)」。群里的内容务必带上；私聊不用' },
         list: { type: 'boolean', description: '只看有哪些本子，不读不写' },
       },
     },
