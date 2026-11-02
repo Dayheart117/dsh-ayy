@@ -94,6 +94,44 @@ function splitParagraphs(text) {
     .filter(Boolean)
 }
 
+/** 时间戳：本地时间，人看着舒服 */
+function stampHuman() {
+  const d = new Date()
+  const p2 = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+}
+
+/**
+ * 这条是从哪来的。
+ * 优先从执行上下文里取会话（版本不同字段名不同，逐个试），取不到再用她填的 scene。
+ * 都拿不到就写 unknown —— 宁可标"不知道"，也不编一个像样的来源。
+ */
+function describeSource(args, execCtx) {
+  const tried = []
+  const ctxs = [execCtx, execCtx && execCtx.context, execCtx && execCtx.session, args]
+  for (const c of ctxs) {
+    if (!c || typeof c !== 'object') continue
+    for (const k of ['sessionId', 'sessionKey', 'sid', 'id', 'key']) {
+      const v = c[k]
+      if (typeof v === 'string' && /^session-/.test(v)) return { value: v, from: 'auto:' + k, line: srcLine(v) }
+    }
+    if (c.session && typeof c.session === 'object') {
+      for (const k of ['id', 'sessionId', 'key']) {
+        const v = c.session[k]
+        if (typeof v === 'string' && v.trim()) return { value: v, from: 'auto:session.' + k, line: srcLine(v) }
+      }
+    }
+    tried.push(Object.keys(c).join(','))
+  }
+  const scene = String((args && args.scene) || '').trim()
+  if (scene) return { value: scene, from: 'arg:scene', line: srcLine(scene) }
+  return { value: 'unknown', from: 'none', line: srcLine('unknown') }
+}
+
+function srcLine(value) {
+  return `<!-- src: ${value} · ${stampHuman()} -->`
+}
+
 const out = () => ({
   schema: { type: 'object', properties: {}, additionalProperties: true },
   render: (_a, val) => [{ type: 'text', text: typeof val === 'string' ? val : JSON.stringify(val, null, 1) }],
@@ -111,6 +149,8 @@ export function apply(ctx) {
       '· 只传 name = 读整本回来；\n' +
       '· 传 search = 按关键词找，只返回命中的那几节（本子大了就用它，别整本读）；\n' +
       '· list=true = 看有哪些本子。\n' +
+      '**来源**：用 append 时插件会自动在末尾写一行 `<!-- src: 场景 · 时间 -->`，将来能追溯"这条是哪一场写的"。\n' +
+      '  自动取不到场景时，你可以在 scene 里写清楚（比如「老群 524271081」），或者写「她备注：…」。\n' +
       '注意：短期动态（刚发生的事）用 ayy_ledger，不要往这里塞。',
     parameters: {
       type: 'object',
@@ -119,11 +159,13 @@ export function apply(ctx) {
         content: { type: 'string', description: '正文（markdown）。给了就是整本重写' },
         append: { type: 'string', description: '要追加到本子末尾的一段；本子不存在就新建。只加一条时用它' },
         search: { type: 'string', description: '关键词。给了就只返回命中的节（可配合 name 限定一本；不给 name 就搜全部本子）' },
+        source: { type: 'string', description: '只搜某一来源的条目（比如「qq:group:524271081」或「2026-11-02」）' },
+        scene: { type: 'string', description: '这条是从哪来的（自动取不到时填，比如「qq:group:524271081」或「老群」）' },
         list: { type: 'boolean', description: '只看有哪些本子，不读不写' },
       },
     },
     output: out(),
-    async execute(args) {
+    async execute(args, execCtx) {
       if (args?.list) {
         const items = listNotes()
         return { count: items.length, dir: NOTES_DIR, notes: items.length ? items : ['（还没有本子）'] }
@@ -133,12 +175,15 @@ export function apply(ctx) {
       const kw = String(args?.search || '').trim()
       if (kw) {
         const names = args?.name ? [normalizeName(args.name)] : listNotes().map((n) => n.name)
+        const srcFilter = String(args?.source || '').trim()
         const hits = []
         for (const n of names) {
           const body = readText(fileOf(n))
           if (!body.trim()) continue
           for (const section of splitSections(body)) {
             if (!section.text.includes(kw)) continue
+            // 按来源筛：只留来源注释里带这个字样的节
+            if (srcFilter && !section.text.includes(srcFilter)) continue
             // 节内再按空行切段：只把命中的那几段带回来，前面捎上节标题做定位
             const paras = splitParagraphs(section.text).filter((p) => p.includes(kw))
             for (const p of paras.slice(0, 3)) {
@@ -172,9 +217,21 @@ export function apply(ctx) {
         if (!add) throw new Error('append 不能为空')
         const old = readText(file)
         const sep = !old.trim() ? '' : old.endsWith('\n') ? '' : '\n'
-        const next = old.trim() ? old + sep + '\n' + add + '\n' : add + '\n'
+        // 来源：能从执行上下文里取到就用它，取不到用她填的 scene，都没有就写 unknown
+        const src = describeSource(args, execCtx)
+        const block = add + '\n\n' + src.line + '\n'
+        const next = old.trim() ? old + sep + '\n' + block : block
         writeText(file, next)
-        return { ok: true, mode: 'append', name, file, addedChars: add.length, totalChars: next.length }
+        return {
+          ok: true,
+          mode: 'append',
+          name,
+          file,
+          addedChars: add.length,
+          totalChars: next.length,
+          source: src.value,
+          sourceFrom: src.from,
+        }
       }
 
       const content = String(args.content || '').trim()
