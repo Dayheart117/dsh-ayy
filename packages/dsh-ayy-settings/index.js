@@ -708,6 +708,7 @@ function liveTitles() {
 
 /** 本机的全部会话（从 sessions/<工作区>/<会话id>/ 摸出来） */
 function allSessions() {
+  const titles = liveTitles() // 活着的会话才有标题；盘上的只有 id
   const root = join(dshHome(), 'sessions')
   const out = []
   let workspaces = []
