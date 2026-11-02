@@ -1,0 +1,29 @@
+{
+  "name": "dsh-ayy-qq",
+  "version": "0.1.0",
+  "description": "安源悦 · QQ 三合一：收文件 + 通知中继（戳一戳/撤回/进退群）+ 谁在说话共享记录",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "ayy",
+    "qq",
+    "files",
+    "notice",
+    "speaker"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

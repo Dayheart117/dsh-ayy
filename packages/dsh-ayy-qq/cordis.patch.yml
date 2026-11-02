@@ -1,0 +1,5 @@
+# 安源悦 · QQ 三合一：收文件 + 通知中继（戳一戳/撤回/进退群）+ 谁在说话共享记录。
+# 合并自 dsh-ayy-files 与 dsh-ayy-notice；老路径（~/.dsh/ayy-files、~/.dsh/ayy-notice）继续用。
+- insert:
+    - id: ayy-qq
+      name: dsh-ayy-qq
