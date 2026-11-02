@@ -26,7 +26,11 @@ $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $pDest = Join-Path $dest 'personas'
 New-Item -ItemType Directory -Force -Path $pDest | Out-Null
 Copy-Item (Join-Path $personas '*.md') $pDest -Force -ErrorAction SilentlyContinue
-foreach ($sub in @('diary', 'diary-history', 'who-i-am-history')) {
+# notes      = her own notebooks (topics: exam errors, interview cards, backstory...)
+# notes-history / who-i-am-history / diary-history = old versions of the above
+# memory-history = pre-write copies made by ayy_memory (kept out of git on purpose:
+#                  it IS the rollback mechanism, and git already versions her-memory.md)
+foreach ($sub in @('diary', 'diary-history', 'who-i-am-history', 'notes', 'notes-history', 'ledger')) {
   $from = Join-Path $personas $sub
   $to = Join-Path $pDest $sub
   if (Test-Path $from) {
@@ -35,10 +39,16 @@ foreach ($sub in @('diary', 'diary-history', 'who-i-am-history')) {
   }
 }
 
-# 2) memory: MEMORY.md and archived notes
+# 2) memory: MEMORY.md + archived notes + their pre-write history
 $mDest = Join-Path $dest 'memory'
 New-Item -ItemType Directory -Force -Path $mDest | Out-Null
 Copy-Item (Join-Path $memory '*.md') $mDest -Force -ErrorAction SilentlyContinue
+$memHist = Join-Path $memory '.history'
+if (Test-Path $memHist) {
+  $to = Join-Path $mDest '.history'
+  New-Item -ItemType Directory -Force -Path $to | Out-Null
+  Copy-Item (Join-Path $memHist '*') $to -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # 3) commit
 Push-Location $dest
