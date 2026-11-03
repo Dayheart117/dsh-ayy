@@ -129,17 +129,17 @@ export function register(define) {
             if (srcFilter && !section.text.includes(srcFilter)) continue
             // 节内再按空行切段：只把命中的那几段带回来，前面捎上节标题做定位
             const paras = splitParagraphs(section.text).filter((p) => p.includes(kw))
-            for (const p of paras.slice(0, 3)) {
+            for (const p of paras.slice(0, 2)) {
               hits.push({
                 note: n,
                 heading: section.heading,
-                text: p.length > 500 ? p.slice(0, 500) + '…' : p,
+                text: p.length > 200 ? p.slice(0, 200) + '…' : p,
               })
-              if (hits.length >= 20) break
+              if (hits.length >= 5) break
             }
-            if (hits.length >= 20) break
+            if (hits.length >= 5) break
           }
-          if (hits.length >= 20) break
+          if (hits.length >= 5) break
         }
         return { keyword: kw, count: hits.length, hits: hits.length ? hits : '（没找到，换个词试试）' }
       }
