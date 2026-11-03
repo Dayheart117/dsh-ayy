@@ -217,15 +217,10 @@ export function register(define) {
   define({
     name: 'ayy_ledger',
     description:
-      '你的记忆，三档：\n' +
-      '· add —— 短期动态：写进 MEMORY.md「最近动态」，最多 5 条，**每轮所有会话都看得到**（群、私聊、网页）。' +
-      '只记：新出现的人和称呼、ta 的状态变化、约定和承诺、你的重要决定。闲聊水群别记。\n' +
-      '· open / close / threads —— 「还没回的话」：跨会话的未完成项，最多 3 条。' +
-      '**什么时候用**：答应了谁什么事、对方在等一个结果、跨会话还没做完的约定——换一个会话就接不上话头的时候靠它。' +
-      '**不是待办清单**，琐事、一次性的小事别往里塞。open 记一条（text ≤40 字，scene 可选）；close 按序号关掉；threads 看现在挂着什么。\n' +
-      '· promote —— 把最近动态里的第几条升格成**永久归档**（memory_search 搜得到，不会淡忘）。\n' +
-      '· recall —— 按关键词翻流水和归档，带时间。想不起来什么事的时候先翻这个。\n' +
-      '· recent / drop / stats —— 看窗口、删一条、看计数。',
+      '你的跨会话记忆，三档：\n' +
+      '· add 短期动态（≤5 条，每轮所有会话可见）：只记新人/称呼、ta 的状态变化、约定、你的重要决定。闲聊别记。\n' +
+      '· open/close/threads「还没回的话」（≤3 条）：答应了谁、谁在等结果、跨会话没做完的事。不是待办清单。\n' +
+      '· promote 把动态升格成永久归档（memory_search 搜得到）· recall 按关键词翻流水 · recent/stats 看窗口。',
     parameters: {
       type: 'object',
       properties: {
@@ -234,12 +229,12 @@ export function register(define) {
           enum: ['add', 'open', 'close', 'threads', 'promote', 'recall', 'recent', 'drop', 'stats'],
           description: '默认 add',
         },
-        text: { type: 'string', description: 'add：一句话，别超 60 字（写清"谁/什么事"）；open：未完成项，别超 40 字' },
-        scene: { type: 'string', description: 'add/open：这条发生在哪；不填按私聊' },
-        index: { type: 'integer', description: 'promote/drop/close：第几条，从 1 数（1 = 窗口最上面那条）' },
-        title: { type: 'string', description: 'promote：归档标题' },
-        tags: { type: 'string', description: 'promote：标签，逗号分隔' },
-        query: { type: 'string', description: 'recall：关键词，可以多个空格分开' },
+        text: { type: 'string', description: 'add≤60字 / open≤40字' },
+        scene: { type: 'string', description: '发生在哪' },
+        index: { type: 'integer', description: '第几条，从 1 数' },
+        title: { type: 'string', description: '归档标题' },
+        tags: { type: 'string', description: '标签，逗号分隔' },
+        query: { type: 'string', description: 'recall 关键词' },
       },
     },
     output: objectOutput(),

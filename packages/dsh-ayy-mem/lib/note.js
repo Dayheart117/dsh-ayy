@@ -82,29 +82,22 @@ export function register(define) {
   define({
     name: 'ayy_note',
     description:
-      '你自己的本子——按主题存任何想长期留着的文字：自己的身世、某个人的小传、错题整理、一个想法、一份清单。\n' +
-      '跟日记不一样：日记按天写，这本子按主题写，想改就改（旧版自动留档）。\n' +
-      '用法：\n' +
-      '· 传 name + content = 整本重写（旧版存进 notes-history）；\n' +
-      '· 传 name + append = 往末尾追加一段（**加一条就用这个，别整本重写**，又快又不会改坏前文）；\n' +
-      '· 只传 name = 读整本回来；\n' +
-      '· 传 search = 按关键词找，只返回命中的那几节（本子大了就用它，别整本读）；\n' +
-      '· list=true = 看有哪些本子。\n' +
-      '**来源**：用 append 时插件会自动在末尾写一行 `<!-- src: 场景 · 时间 · 会话id -->`，将来能追溯"这条是哪一场写的"。\n' +
-      '  **群里记东西必须带 speaker**（昵称(QQ号)，例如「锤子(1610827876)」），否则以后分不清是谁说的；私聊不用。\n' +
-      '  自动取不到场景时，你可以在 scene 里写清楚（比如「老群 524271081」），或者写「她备注：…」。\n' +
-      '注意：短期动态（刚发生的事）用 ayy_ledger，不要往这里塞。',
+      '你自己的本子：按主题存长期的东西（身世、小传、错题、想法、清单）。日记按天，这个按主题。\n' +
+      '· name+content=整本重写（旧版进 notes-history）· name+append=末尾加一段（加一条就用它）\n' +
+      '· 只传 name=读整本 · search=只回命中片段（本子大了用它）· list=true=看有哪些本子\n' +
+      'append 会自动记来源（场景·时间·会话id）；**群里记东西必须带 speaker**「昵称(QQ号)」。\n' +
+      '刚发生的事用 ayy_ledger，别塞这里。',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '本子名，如 backstory、错题、某某小传；同名覆盖' },
-        content: { type: 'string', description: '正文（markdown）。给了就是整本重写' },
-        append: { type: 'string', description: '要追加到本子末尾的一段；本子不存在就新建。只加一条时用它' },
-        search: { type: 'string', description: '关键词。给了就只返回命中的节（可配合 name 限定一本；不给 name 就搜全部本子）' },
-        source: { type: 'string', description: '只搜某一来源的条目（比如「qq:group:524271081」或「2026-11-02」）' },
-        scene: { type: 'string', description: '这条是从哪来的（自动取不到时填，比如「qq:group:524271081」或「老群」）' },
-        speaker: { type: 'string', description: '群里是**谁**说的：昵称(QQ号)，例如「锤子(1610827876)」。群里的内容务必带上；私聊不用' },
-        list: { type: 'boolean', description: '只看有哪些本子，不读不写' },
+        name: { type: 'string', description: '本子名，同名覆盖' },
+        content: { type: 'string', description: '整本重写' },
+        append: { type: 'string', description: '往末尾加一段' },
+        search: { type: 'string', description: '关键词' },
+        source: { type: 'string', description: '按来源筛' },
+        scene: { type: 'string', description: '来源（自动取不到时填）' },
+        speaker: { type: 'string', description: '群里谁说的：昵称(QQ号)' },
+        list: { type: 'boolean', description: '只看列表' },
       },
     },
     output: objectOutput(),
