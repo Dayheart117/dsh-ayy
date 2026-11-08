@@ -122,8 +122,8 @@ function statsOf(groupBy, month, sourceFilter) {
   const sql = `
     SELECT COALESCE(NULLIF(${col}, ''), '(未填)') AS key,
            COUNT(*) AS n,
-           SUM(CASE WHEN score IS NOT NULL AND full IS NOT NULL AND score < full THEN 1 ELSE 0 END) AS wrong_n,
-           SUM(CASE WHEN score IS NULL THEN 1 ELSE 0 END) AS unknown_n,
+           SUM(CASE WHEN score IS NOT NULL AND score <> '' AND full IS NOT NULL AND full <> '' AND score * 1.0 < full * 1.0 THEN 1 ELSE 0 END) AS wrong_n,
+           SUM(CASE WHEN score IS NULL OR score = '' THEN 1 ELSE 0 END) AS unknown_n,
            AVG(CASE WHEN score IS NOT NULL AND full IS NOT NULL AND full > 0 THEN score * 1.0 / full END) AS rate
     FROM questions
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
