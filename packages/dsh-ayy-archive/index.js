@@ -102,8 +102,8 @@ function searchOnce(d, term, o, limit) {
   if ([...term].length >= 3) {
     try {
       const rows = d
-        .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, snippet(chunks_fts, 1, "\u3010", "\u3011", "\u2026", 30) AS s FROM chunks_fts f JOIN chunks c ON c.id = f.id WHERE f.text MATCH ?' + whereExtra + ' ORDER BY rank LIMIT ?')
-        .all(term, ...args, limit)
+        .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, snippet(chunks_fts, 1, "\u3010", "\u3011", "\u2026", 30) AS s, (length(c.text) - length(replace(c.text, ?, ""))) / length(?) AS occ FROM chunks_fts f JOIN chunks c ON c.id = f.id WHERE f.text MATCH ?' + whereExtra + ' ORDER BY rank LIMIT ?')
+        .all(term, term, term, ...args, limit)
       if (rows.length) return rows.map((r) => Object.assign({}, r, { how: 'FTS' }))
     } catch (e) { /* 落到 LIKE */ }
   }
@@ -177,7 +177,9 @@ async function search(q, opts) {
     for (const r of searchOnce(d, t, o, limit * 3)) {
       const cur = agg.get(r.id) || Object.assign({}, r, { terms: new Set(), score: 0 })
       cur.terms.add(t)
-      cur.score += idf * [...t].length * [...t].length
+// 得分 = idf x 词长^2 x (1 + 密度)，密度 = 出现次数占片段的比例（同一次命中，短片段更贴题）
+      const density = Math.min(3, ((r.occ || 1) * [...t].length) / Math.max(1, r.chars || 400))
+      cur.score += idf * [...t].length * [...t].length * (1 + density)
       agg.set(r.id, cur)
     }
   }
