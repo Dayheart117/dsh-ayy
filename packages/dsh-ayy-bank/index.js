@@ -50,6 +50,22 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_module ON questions(module);
     CREATE INDEX IF NOT EXISTS idx_wrong ON questions(wrong);
   `)
+  // 整卷成绩：一个卷子 + 每个节点的题数/答对/用时（对应粉笔成绩单那种层级）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS papers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      day TEXT, source TEXT, subject TEXT,
+      total INTEGER, right_n INTEGER, wrong_n INTEGER, seconds INTEGER, score REAL,
+      note TEXT, created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS paper_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      paper_id INTEGER, module TEXT, type TEXT, ability TEXT,
+      total INTEGER, right_n INTEGER, seconds INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_pn_paper ON paper_nodes(paper_id);
+  `)
+
   // 后加的列：老库自动补（ALTER 加列，不重建表）
   const have = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
   for (const [col, def] of [
@@ -282,12 +298,13 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'], description: 'stats 分组维度，默认 type' },
         material: { type: 'string', description: '材料类型：文字资料/统计表/统计图/综合资料（资料分析用）' },
         subject: { type: 'string', description: '科目：行测/申论/面试，默认 行测' },
+        paper: { type: 'object', additionalProperties: true, description: 'report：整卷成绩 {day, source, subject, total, right, wrong, seconds, score, nodes:[{module,type,ability,total,right,seconds}]}' },
         month: { type: 'string', description: 'stats/list 限定月份，如 2026-11' },
         type: { type: 'string', description: 'list 筛选：题型' },
         wrong: { type: 'string', description: 'list 筛选：错因' },
@@ -399,6 +416,28 @@ export function apply(ctx) {
         return { ok: true, total: rows.length, 已建向量: ok, 跳过: fail, 提示: fail ? '本地模型没开的话先 ayy_local(action:"up")' : '全部就绪' }
       }
 
+      if (action === 'report') {
+        const p2 = args?.paper || {}
+        const d = open()
+        const info = d.prepare(`INSERT INTO papers (day, source, subject, total, right_n, wrong_n, seconds, score, note, created)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+          String(p2.day || today()).slice(0, 10),
+          String(p2.source || ''),
+          String(p2.subject || '行测'),
+          p2.total ?? null, p2.right ?? null, p2.wrong ?? null, p2.seconds ?? null, p2.score ?? null,
+          String(p2.note || ''),
+          new Date().toISOString(),
+        )
+        const pid = Number(info.lastInsertRowid)
+        const nodes = Array.isArray(p2.nodes) ? p2.nodes : []
+        const ins = d.prepare('INSERT INTO paper_nodes (paper_id, module, type, ability, total, right_n, seconds) VALUES (?,?,?,?,?,?,?)')
+        for (const n of nodes) {
+          ins.run(pid, String(n.module || ''), String(n.type || ''), String(n.ability || ''), n.total ?? null, n.right ?? null, n.seconds ?? null)
+        }
+        log(`report #${pid} ${p2.source || ''} nodes=${nodes.length}`)
+        return { ok: true, paper_id: pid, 节点数: nodes.length }
+      }
+
       if (action === 'taxonomy') {
         const tax = readTaxonomy()
         const subj = String(args?.subject || '').trim()
@@ -409,9 +448,22 @@ export function apply(ctx) {
           if (subj && s !== subj) continue
           out[s] = {}
           for (const [m, types] of Object.entries(mods)) {
-            out[s][m] = types.length
-              ? types.map((t) => `${t}(${count(s, m, t)})`)
-              : [`（题型待补，已有 ${rows.filter((r) => r.subject === s && r.module === m).length} 题）`]
+            if (Array.isArray(types)) {
+              out[s][m] = types.length ? types.map((t) => `${t}(${count(s, m, t)})`) : ['（题型待补）']
+              continue
+            }
+            // 四层：模块 → 题型 → 考点
+            const flat = []
+            for (const [t, points] of Object.entries(types)) {
+              const n = count(s, m, t)
+              if (!Array.isArray(points) || !points.length) { flat.push(`${t}(${n})`); continue }
+              const sub = points.map((pt) => {
+                const r2 = open().prepare('SELECT COUNT(*) n FROM questions WHERE subject=? AND module=? AND type=? AND ability=?').get(s, m, t, pt).n
+                return `${pt}(${r2})`
+              })
+              flat.push(`${t}(${n}) → ${sub.join(' · ')}`)
+            }
+            out[s][m] = flat
           }
         }
         return { 说明: '括号里是库里已有的题数。题型可以随时往 taxonomy.json 里加。', tree: out }
