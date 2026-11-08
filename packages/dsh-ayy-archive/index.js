@@ -58,15 +58,6 @@ function open() {
   if (db) return db
   if (!existsSync(DB)) return null
   db = new DatabaseSync(DB)
-  // 插件自己也要建这两张表：还没跑过 ingest 时 forget / 向量也得能工作
-  try {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS tombstones (kind TEXT, value TEXT, at TEXT, PRIMARY KEY (kind, value));
-      CREATE TABLE IF NOT EXISTS vecs (id TEXT PRIMARY KEY, model TEXT, dim INTEGER, v BLOB, text_hash TEXT, at TEXT);
-    `)
-  } catch {
-    /* 建表失败不阻塞检索 */
-  }
   return db
 }
 
@@ -102,8 +93,8 @@ function searchOnce(d, term, o, limit) {
   if ([...term].length >= 3) {
     try {
       const rows = d
-        .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, snippet(chunks_fts, 1, "\u3010", "\u3011", "\u2026", 30) AS s, (length(c.text) - length(replace(c.text, ?, ""))) / length(?) AS occ FROM chunks_fts f JOIN chunks c ON c.id = f.id WHERE f.text MATCH ?' + whereExtra + ' ORDER BY rank LIMIT ?')
-        .all(term, term, term, ...args, limit)
+        .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, snippet(chunks_fts, 1, "\u3010", "\u3011", "\u2026", 30) AS s FROM chunks_fts f JOIN chunks c ON c.id = f.id WHERE f.text MATCH ?' + whereExtra + ' ORDER BY rank LIMIT ?')
+        .all(term, ...args, limit)
       if (rows.length) return rows.map((r) => Object.assign({}, r, { how: 'FTS' }))
     } catch (e) { /* 落到 LIKE */ }
   }
@@ -177,70 +168,58 @@ async function search(q, opts) {
     for (const r of searchOnce(d, t, o, limit * 3)) {
       const cur = agg.get(r.id) || Object.assign({}, r, { terms: new Set(), score: 0 })
       cur.terms.add(t)
-// 得分 = idf x 词长^2 x (1 + 密度)，密度 = 出现次数占片段的比例（同一次命中，短片段更贴题）
-      const density = Math.min(3, ((r.occ || 1) * [...t].length) / Math.max(1, r.chars || 400))
-      cur.score += idf * [...t].length * [...t].length * (1 + density)
+      cur.score += idf * [...t].length * [...t].length
       agg.set(r.id, cur)
     }
   }
-  // 关键词候选（还没过滤）
-  const cand0 = [...agg.values()]
-  // ---- 语义只做「加分」，不独立召回（实测纯余弦分不开正负样本：正 0.505 < 负 0.548）----
-  let semOn = false
-  if (await localUp(1200)) {
-    const qv = await embed(q)
-    if (qv) {
-      semOn = true
-      const where = []
-      const args = []
-      if (o.sessions && o.sessions.length) { where.push('c.session IN (' + o.sessions.map(() => '?').join(',') + ')'); args.push(...o.sessions) }
-      if (o.scopeShow) { where.push('c.scope = ?'); args.push(o.scopeShow) }
-      if (o.dayFrom) { where.push('c.day >= ?'); args.push(o.dayFrom) }
-      if (o.dayTo) { where.push('c.day <= ?'); args.push(o.dayTo) }
-      const vecMap = new Map()
-      for (const v of d.prepare('SELECT v.id, v.v AS vec, c.session, c.scope, c.day, c.meta, c.text, c.chars FROM vecs v JOIN chunks c ON c.id = v.id' + (where.length ? ' WHERE ' + where.join(' AND ') : '')).all(...args)) {
-        vecMap.set(v.id, v)
-      }
-      const kwMax = cand0.reduce((m, r) => Math.max(m, r.score || 0), 1)
-      // 1) 给关键词候选算 cos
-      for (const r of cand0) {
-        const v = vecMap.get(r.id)
-        if (!v) continue
-        r.cos = cosine(qv, unpack(v.vec))
-        const kw = (r.score || 0) / kwMax
-        r.score = 0.85 * kw + 0.15 * Math.max(0, r.cos) // 语义只当小幅加分，排序仍以关键词为主
-      }
-      // 2) 高置信度的纯语义结果才可以自己进来
-      for (const [id, v] of vecMap) {
-        if (agg.has(id)) continue
-        const cos = cosine(qv, unpack(v.vec))
-        if (cos < 0.62) continue
-        cand0.push({
-          id, day: v.day, session: v.session, scope: v.scope, chars: v.chars, meta: v.meta,
-          s: String(v.text).slice(0, 140), terms: new Set(), hits: 1, coverage: cos, cos, how: 'VEC',
-          score: -1, // 纯语义补位：永远排在关键词结果后面
-        })
-      }
-    }
-  }
-  // 相关性门槛：关键词覆盖够，或者语义足够确定
+  // 相关性门槛：命中的内容字符要占查询内容的大半
   const MIN_COVERAGE = 0.5
-  const MIN_COS_ALONE = 0.62
   const out = []
-  for (const r of cand0) {
+  for (const r of agg.values()) {
     const covered = new Set([...r.terms].flatMap((t) => [...t].filter((c) => plain.includes(c)))).size
     const coverage = Math.min(1, covered / Math.max(1, new Set(qChars).size))
+    if (coverage < MIN_COVERAGE) continue
+    if (r.meta) r.score *= 0.3 // 元对话降权，不删
     r.coverage = coverage
-    const pass = coverage >= MIN_COVERAGE || (semOn && (r.cos || 0) >= MIN_COS_ALONE)
-    if (!pass) continue
-    if (r.meta) r.score *= 0.3 // 元对话降权
-    r.hits = r.terms.size || 1
+    r.hits = r.terms.size
     out.push(r)
   }
+  out.sort((a, b) => b.score - a.score || (b.day || '').localeCompare(a.day || ''))
   return out.slice(0, limit)
 }
 
 
+/** 子片召回兜底：关键词一个都没命中时，用 120 字子片的向量找回来 */
+async function subRecall(q, args, exclude) {
+  if (!(await localUp(1200))) return []
+  const d = open()
+  if (!d) return []
+  const has = new Set((exclude || []).map((r) => r.id))
+  const limit = Math.max(1, Math.min(Number(args?.limit) || 5, 20))
+  const qv = await embed(q)
+  if (!qv) return []
+  const scope = String(args?.scope || 'her')
+  const where = []
+  const params = []
+  if (scope === 'her') { const s2 = herPrivateSessions(); if (s2.length) { where.push('c.session IN (' + s2.map(() => '?').join(',') + ')'); params.push(...s2) } }
+  else if (scope === 'her_all') { const s3 = herSessions(); if (s3.length) { where.push('c.session IN (' + s3.map(() => '?').join(',') + ')'); params.push(...s3) } }
+  else if (scope === 'group' || scope === 'private') { where.push('c.scope = ?'); params.push(scope) }
+  if (args?.since) { where.push('c.day >= ?'); params.push(String(args.since)) }
+  if (args?.until) { where.push('c.day <= ?'); params.push(String(args.until)) }
+  const subs = d.prepare('SELECT s.chunk_id, s.text, s.v AS vec, c.day, c.session, c.scope, c.chars FROM subvecs s JOIN chunks c ON c.id = s.chunk_id' + (where.length ? ' WHERE ' + where.join(' AND ') : '')).all(...params)
+  const best = new Map()
+  for (const s of subs) {
+    if (has.has(s.chunk_id)) continue
+    const cos = cosine(qv, unpack(s.vec))
+    if (cos < 0.6) continue
+    const prev = best.get(s.chunk_id)
+    if (!prev || cos > prev.cos) best.set(s.chunk_id, { cos, text: s.text, s })
+  }
+  return [...best.entries()]
+    .sort((a, b) => b[1].cos - a[1].cos)
+    .slice(0, limit)
+    .map(([id, h]) => ({ id, day: h.s.day, session: h.s.session, scope: h.s.scope, chars: h.s.chars, s: String(h.text).slice(0, 140), cos: h.cos, how: 'SUB' }))
+}
 const fmt = (r) => r.day + " · " + (r.scope === "group" ? "群" : "私聊") + " · " + r.chars + "字"
 
 
@@ -271,7 +250,7 @@ export function apply(ctx) {
         scope: { type: 'string', enum: ['her', 'her_all', 'private', 'group', 'all'], description: '默认 her=只她的私聊；her_all=含群；all=连开发对话' },
         limit: { type: 'integer', description: '返回条数，默认 5' },
         by: { type: 'string', enum: ['id', 'day', 'session'], description: 'forget：按什么删' },
-        value: { type: 'string', description: 'forget：id / 日期(YYYY-MM-DD) / 会话id' },
+        value: { type: 'string', description: 'forget：id / 日期 / 会话id' },
       },
       required: ['action'],
     },
@@ -282,7 +261,14 @@ export function apply(ctx) {
       if (action === 'search') {
         const q = String(args?.query || '').trim()
         if (!q) throw new Error('search 需要 query')
-        const rows = await search(q, args)
+        let rows = await search(q, args)
+        // 关键词不够数时，用子片向量补位（排后面，只做兜底召回）
+        if (rows.length < (Number(args?.limit) || 5)) {
+          try {
+            const extra = await subRecall(q, args, rows)
+            rows = rows.concat(extra)
+          } catch { /* 本地模型没开就跳过 */ }
+        }
         log(`search「${q}」→ ${rows.length} 条`)
         if (!rows.length) return { count: 0, 说法: `库里没找到「${q}」。要么真没聊过，要么那段还没入（可以 ingest 补上）。` }
         return {
@@ -302,56 +288,44 @@ export function apply(ctx) {
         return { id: r.id, day: r.day, session: r.session, scope: r.scope, 字数: r.chars, 原文: r.text }
       }
 
-      if (action === 'reindex') {
-        const d = open()
-        if (!d) throw new Error('库还没建')
-        if (!(await localUp())) return { ok: false, 提示: '本地模型没开：先 ayy_local(action:"up")' }
-        const rows = d.prepare(`SELECT c.id, c.text FROM chunks c
-          LEFT JOIN vecs v ON v.id = c.id WHERE v.id IS NULL`).all()
-        let ok = 0
-        let fail = 0
-        for (const r of rows) {
-          const h = hashOf(String(r.text).slice(0, 500))
-          const v = await embed(String(r.text).slice(0, 800))
-          if (!v) { fail++; continue }
-          d.prepare('INSERT OR REPLACE INTO vecs (id, model, dim, v, text_hash, at) VALUES (?,?,?,?,?,?)').run(
-            r.id, 'bge-m3', v.length, pack(v), h, new Date().toISOString(),
-          )
-          ok++
-        }
-        log(`reindex: ${ok} 成功 / ${fail} 失败`)
-        return { ok: true, 待建: rows.length, 已建: ok, 失败: fail }
-      }
-
       if (action === 'forget') {
         const d = open()
         if (!d) throw new Error('库还没建')
         const by = String(args?.by || '')
         const value = String(args?.value || '').trim()
-        if (!by || !value) throw new Error('forget 需要 by + value')
-        if (!['id', 'day', 'session'].includes(by)) throw new Error('by 只能是 id / day / session')
-        // 1) 找出要删的
+        if (!['id', 'day', 'session'].includes(by) || !value) throw new Error('forget 需要 by(id/day/session) + value')
         const rows =
           by === 'id'
             ? d.prepare('SELECT id FROM chunks WHERE id = ?').all(value)
             : by === 'day'
               ? d.prepare('SELECT id FROM chunks WHERE day = ?').all(value)
               : d.prepare('SELECT id FROM chunks WHERE session = ?').all(value)
-        // 2) 立墓碑（重新入库不许回来）
         d.prepare('INSERT OR REPLACE INTO tombstones (kind, value, at) VALUES (?,?,?)').run(by, value, new Date().toISOString())
-        // 3) 正文 + 索引一起删
         for (const r of rows) {
           d.prepare('DELETE FROM chunks WHERE id = ?').run(r.id)
           d.prepare('DELETE FROM chunks_fts WHERE id = ?').run(r.id)
-          try { d.prepare('DELETE FROM vecs WHERE id = ?').run(r.id) } catch { /* 向量表可能还没有 */ }
+          try { d.prepare('DELETE FROM vecs WHERE id = ?').run(r.id) } catch { /* 没向量表 */ }
+          try { d.prepare('DELETE FROM subvecs WHERE chunk_id = ?').run(r.id) } catch { /* 没子片表 */ }
         }
-        log(`forget ${by}=${value} → 删了 ${rows.length} 片`)
-        return {
-          ok: true,
-          删了: rows.length,
-          已立墓碑: `${by}=${value}`,
-          注意: '库里的正文和索引都删了；原始会话文件（sessions/*.zstd）还在，那是底层存档，要清得另外处理',
+        log(`forget ${by}=${value} → ${rows.length} 片`)
+        return { ok: true, 删了: rows.length, 已立墓碑: `${by}=${value}`, 注意: '库里的正文和索引都删了；sessions/*.zstd 是底层存档，要清得另外处理' }
+      }
+
+      if (action === 'reindex') {
+        const d = open()
+        if (!d) throw new Error('库还没建')
+        if (!(await localUp())) return { ok: false, 提示: '本地模型没开：先 ayy_local(action:"up")' }
+        const rows = d.prepare('SELECT c.id, c.text FROM chunks c LEFT JOIN vecs v ON v.id = c.id WHERE v.id IS NULL').all()
+        let ok = 0
+        let fail = 0
+        for (const r of rows) {
+          const v = await embed(String(r.text).slice(0, 800))
+          if (!v) { fail++; continue }
+          d.prepare('INSERT OR REPLACE INTO vecs (id, model, dim, v, text_hash, at) VALUES (?,?,?,?,?,?)').run(r.id, 'bge-m3', v.length, pack(v), hashOf(String(r.text).slice(0, 500)), new Date().toISOString())
+          ok++
         }
+        log(`reindex: ${ok}/${rows.length}`)
+        return { ok: true, 待建: rows.length, 已建: ok, 失败: fail, 提示: fail ? '有的没建成，看 Ollama 是否还在' : '好了' }
       }
 
       if (action === 'stats') {
