@@ -4,7 +4,7 @@
 //   node tools/archive-ingest.mjs --limit 100     先建 100 片的试点索引
 //   node tools/archive-ingest.mjs --all           全量
 //   node tools/archive-ingest.mjs --all --force   忽略已有的，重算（切分规则改了才用）
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import zlib from 'node:zlib'
@@ -166,6 +166,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_session ON chunks(session);
   CREATE INDEX IF NOT EXISTS idx_scope ON chunks(scope);
 `)
+// 记录每个会话文件处理到哪（size+mtime）→ 没变就跳过
+db.exec(`CREATE TABLE IF NOT EXISTS files (
+  session TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, chunks INTEGER, at TEXT
+)`)
+
 // 老库补 meta 列
 try { db.exec('ALTER TABLE chunks ADD COLUMN meta INTEGER DEFAULT 0') } catch { /* 已有 */ }
 
@@ -184,17 +189,33 @@ const dayOf = (ms) => {
 
 let added = 0
 let skipped = 0
+let changedFiles = 0
+let sameFiles = 0
 const PER_SESSION = LIMIT ? Math.max(3, Math.ceil(LIMIT / Math.max(1, files.length))) : 0
 const target = CH['目标字数'] || 500
 const max = CH['最大字数'] || 900
 
 for (const f of files) {
   if (LIMIT && added >= LIMIT) break
+  const st = statSync(f.file)
+  const prev = db.prepare('SELECT size, mtime FROM files WHERE session = ?').get(f.session)
+  if (!FORCE && prev && prev.size === st.size && prev.mtime === Math.round(st.mtimeMs)) {
+    sameFiles++
+    continue
+  }
+  changedFiles++
   let recs
   try {
     recs = decode(f.file)
   } catch {
     continue
+  }
+  // 这个文件变了：先清掉它的旧片段（处理删改），再重建
+  if (prev) {
+    for (const r of db.prepare('SELECT id FROM chunks WHERE session = ?').all(f.session)) {
+      db.prepare('DELETE FROM chunks_fts WHERE id = ?').run(r.id)
+    }
+    db.prepare('DELETE FROM chunks WHERE session = ?').run(f.session)
   }
   const bind = BIND.get(f.session) || { type: 'private', name: '' }
   const msgs = []
@@ -231,11 +252,15 @@ for (const f of files) {
     added++
     inThis++
   }
+  // 记下这个文件处理到哪：下次 size+mtime 没变就跳过
+  db.prepare('INSERT OR REPLACE INTO files (session, size, mtime, chunks, at) VALUES (?,?,?,?,?)').run(
+    f.session, st.size, Math.round(st.mtimeMs), inThis, new Date().toISOString(),
+  )
 }
 
 const total = db.prepare('SELECT COUNT(*) n FROM chunks').get().n
 const chars = db.prepare('SELECT SUM(chars) s FROM chunks').get().s || 0
-console.log(`入库 ${added} 片（跳过已存在 ${skipped}）`)
+console.log(`入库 ${added} 片（跳过已存在 ${skipped}）· 变过 ${changedFiles} 个文件 / 没变 ${sameFiles} 个`)
 console.log(`库内合计 ${total} 片 · ${chars.toLocaleString()} 字`)
 console.log(`数据库：${DB}`)
 db.close()
