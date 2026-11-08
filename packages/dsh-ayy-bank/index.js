@@ -6,6 +6,7 @@
  * markdown 本子能干前一半，干不了后一半——只能靠人肉数或者写脚本。
  */
 import { DatabaseSync } from 'node:sqlite'
+import { embed, pack, unpack, cosine, textOf, hashOf, localUp } from './lib/vector.js'
 import { existsSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -61,6 +62,16 @@ function open() {
   ]) {
     if (!have.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vecs (
+      row_id INTEGER PRIMARY KEY,
+      model TEXT,
+      dim INTEGER,
+      v BLOB,
+      text_hash TEXT,
+      at TEXT
+    );
+  `)
   // WAL：读写不互相阻塞，崩溃不易坏
   try {
     db.exec('PRAGMA journal_mode = WAL')
@@ -201,6 +212,57 @@ function listRows(filters, limit) {
   })
 }
 
+/** 给一条题算向量并落库；Ollama 没开就静默跳过（返回 false） */
+async function embedRow(id) {
+  const d = open()
+  const row = d.prepare('SELECT * FROM questions WHERE id = ?').get(id)
+  if (!row) return false
+  const txt = textOf(row)
+  if (!txt) return false
+  const h = hashOf(txt)
+  const old = d.prepare('SELECT text_hash FROM vecs WHERE row_id = ?').get(id)
+  if (old && old.text_hash === h) return true // 没变，不重算
+  const v = await embed(txt)
+  if (!v) return false
+  d.prepare('INSERT OR REPLACE INTO vecs (row_id, model, dim, v, text_hash, at) VALUES (?,?,?,?,?,?)').run(
+    id, 'bge-m3', v.length, pack(v), h, new Date().toISOString(),
+  )
+  return true
+}
+
+/** 语义检索：Ollama 不可用返回 null（调用方退回关键词） */
+async function semanticSearch(query, top, filters) {
+  if (!(await localUp())) return null
+  const qv = await embed(query)
+  if (!qv) return null
+  const d = open()
+  const where = []
+  const args = []
+  for (const [k, v] of Object.entries(filters || {})) {
+    if (!v) continue
+    if (k === 'month') { where.push("substr(q.day,1,7) = ?"); args.push(String(v)) }
+    else { where.push(`q.${k} = ?`); args.push(String(v)) }
+  }
+  const sql = `SELECT q.*, v.v AS vec FROM questions q JOIN vecs v ON v.row_id = q.id
+               ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`
+  const rows = d.prepare(sql).all(...args)
+  const scored = []
+  for (const r of rows) {
+    const v = unpack(r.vec)
+    const s = cosine(qv, v)
+    if (s > 0) scored.push({ score: s, row: r })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, top).map((x) => ({
+    分: Math.round(x.score * 1000) / 1000,
+    id: x.row.id,
+    题: [x.row.day, x.row.source, x.row.module, x.row.type, x.row.no && '#' + x.row.no].filter(Boolean).join(' · '),
+    摘要: x.row.stem || x.row.note || '',
+    错因: x.row.wrong || '',
+    本子: x.row.doc || '',
+  }))
+}
+
 const out = () => ({
   schema: { type: 'object', properties: {}, additionalProperties: true },
   render: (_a, val) => [{ type: 'text', text: typeof val === 'string' ? val : JSON.stringify(val, null, 1) }],
@@ -233,7 +295,8 @@ export function apply(ctx) {
         module: { type: 'string', description: 'list 筛选：模块' },
         id: { type: 'integer', description: 'update/remove 的题目 id' },
         patch: { type: 'object', additionalProperties: true, description: 'update 要改的字段' },
-        limit: { type: 'integer', description: 'list 返回条数，默认 20' },
+        limit: { type: 'integer', description: 'list/search 返回条数，默认 list 20 / search 8' },
+        query: { type: 'string', description: 'search：想找什么（可以是一句大白话）' },
       },
       required: ['action'],
     },
@@ -248,6 +311,9 @@ export function apply(ctx) {
         for (const it of items) ids.push(insertOne(it).id)
         const total = open().prepare('SELECT COUNT(*) AS n FROM questions').get().n
         log(`add ${ids.length} 条 → 库里共 ${total}`)
+        // 尽力算向量：Ollama 没开就跳过，下次 search/reindex 会补
+        let embedded = 0
+        for (const id of ids) { try { if (await embedRow(id)) embedded++ } catch { /* 忽略 */ } }
         // 分类表里没有的题型提一句——不拦，只是让她知道可以补进表里
         const unknown = new Map()
         for (const it of items) {
@@ -258,7 +324,7 @@ export function apply(ctx) {
           if (!checkType(sub, mod, t).known) unknown.set(`${sub}/${mod}/${t}`, true)
         }
         return {
-          ok: true, added: ids.length, ids, total,
+          ok: true, added: ids.length, ids, total, 已建向量: embedded,
           ...(unknown.size ? { 新题型: [...unknown.keys()], 提示: '这些题型不在 taxonomy.json 里；用得多了可以加进去，或者就这么放着也行' } : {}),
         }
       }
@@ -298,7 +364,42 @@ export function apply(ctx) {
         return { ok: true, removed: Number(info.changes), id }
       }
 
-if (action === 'taxonomy') {
+      if (action === 'search') {
+        const q = String(args?.query || '').trim()
+        if (!q) throw new Error('search 需要 query')
+        const top = Math.max(1, Math.min(Number(args?.limit) || 8, 30))
+        const filters = { subject: args?.subject, module: args?.module, type: args?.type, wrong: args?.wrong, source: args?.source, month: args?.month, material: args?.material }
+        const sem = await semanticSearch(q, top, filters)
+        if (sem && sem.length) return { 方式: '语义检索（本地 bge-m3）', query: q, count: sem.length, rows: sem }
+        const d = open()
+        const like = `%${q}%`
+        const rows = d.prepare('SELECT * FROM questions WHERE stem LIKE ? OR note LIKE ? OR ask LIKE ? OR wrong LIKE ? OR type LIKE ? ORDER BY id DESC LIMIT ?').all(like, like, like, like, like, top)
+        return {
+          方式: sem === null ? '关键词检索（本地模型没开，语义不可用）' : '关键词检索（语义无命中）',
+          query: q,
+          count: rows.length,
+          rows: rows.map((r) => ({ id: r.id, 题: [r.day, r.source, r.module, r.type, r.no && '#' + r.no].filter(Boolean).join(' · '), 摘要: r.stem || r.note || '', 错因: r.wrong || '', 本子: r.doc || '' })),
+        }
+      }
+
+      if (action === 'reindex') {
+        const d = open()
+        const rows = d.prepare('SELECT id FROM questions').all()
+        let ok = 0
+        let fail = 0
+        for (const r of rows) {
+          try {
+            if (await embedRow(r.id)) ok++
+            else fail++
+          } catch {
+            fail++
+          }
+        }
+        log(`reindex: ${ok} 成功 / ${fail} 失败`)
+        return { ok: true, total: rows.length, 已建向量: ok, 跳过: fail, 提示: fail ? '本地模型没开的话先 ayy_local(action:"up")' : '全部就绪' }
+      }
+
+      if (action === 'taxonomy') {
         const tax = readTaxonomy()
         const subj = String(args?.subject || '').trim()
         const rows = open().prepare('SELECT subject, module, type, COUNT(*) n FROM questions GROUP BY subject, module, type').all()
