@@ -82,7 +82,7 @@ function open() {
   // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
   // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
   const have2 = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
-  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"]]) {
+  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"]]) {
     if (!have2.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
   // 回填：老数据没有 path 的，用 科目/模块/题型/考点 拼一份
@@ -179,6 +179,14 @@ function insertOne(item) {
     key: item?.key != null ? String(item.key).slice(0, 300) : '',
     doc: item?.doc != null ? String(item.doc) : '',
     material: item?.material != null ? String(item.material) : '',
+    // anchor：稳定锚点（本子里那条解析的标题/题号）；改名、重排都不影响
+    anchor: item?.anchor != null
+      ? String(item.anchor).slice(0, 80)
+      : item?.doc && String(item.doc).includes('#')
+        ? String(item.doc).split('#').slice(1).join('#')
+        : '',
+    // digest：三百字以内摘要，直接可读，不用翻本子（存储不贵，读才贵）
+    digest: item?.digest != null ? String(item.digest).slice(0, 300) : item?.note != null ? String(item.note).slice(0, 300) : '',
     // path：给了就用；没给就用 科目/模块/题型/考点 拼（层级任意深）
     path:
       item?.path != null && String(item.path).trim()
@@ -353,7 +361,8 @@ function listRows(filters, limit) {
     const bits = [r.day, r.source, r.module, r.type].filter(Boolean).join(' · ')
     const sc = r.score != null && r.full != null ? ` 得分 ${r.score}/${r.full}` : ''
     const wr = r.wrong ? ` 错因:${r.wrong}` : ''
-    return `#${r.id} ${bits}${sc}${wr}`
+    const dg = r.digest ? ` | ${String(r.digest).replace(/\s+/g, ' ').slice(0, 40)}` : ''
+    return `#${r.id} ${bits}${sc}${wr}${dg}`
   })
 }
 
@@ -427,7 +436,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
@@ -574,6 +583,27 @@ export function apply(ctx) {
         }
         log(`report #${pid} ${p2.source || ''} nodes=${nodes.length}`)
         return { ok: true, paper_id: pid, 节点数: nodes.length }
+      }
+
+      if (action === 'verify') {
+        // 检查 doc 锚点还在不在：靠"题号/标题"对，不靠行号（行号会断，锚点不会）
+        const d = open()
+        const notesDir = join(HOME, 'personas', 'notes')
+        const rows = d.prepare("SELECT id, doc, anchor FROM questions WHERE doc IS NOT NULL AND doc <> ''").all()
+        const bad = []
+        let ok = 0
+        for (const r of rows) {
+          const [file, ...rest] = String(r.doc).split('#')
+          const anchor = String(r.anchor || rest.join('#') || '').trim()
+          const full = /^[A-Za-z]:/.test(file) ? file : join(notesDir, file)
+          if (!existsSync(full)) { bad.push({ id: r.id, doc: r.doc, 原因: '文件不存在' }); continue }
+          if (!anchor) { bad.push({ id: r.id, doc: r.doc, 原因: '没有锚点（doc 里没写 #）' }); continue }
+          let text = ''
+          try { text = readFileSync(full, 'utf8') } catch { bad.push({ id: r.id, doc: r.doc, 原因: '读不了文件' }); continue }
+          if (text.includes(anchor)) ok++
+          else bad.push({ id: r.id, doc: r.doc, 原因: `本子里找不到「${anchor}」` })
+        }
+        return { 总数: rows.length, 好的: ok, 断了: bad.length, 明细: bad.slice(0, 20) }
       }
 
       if (action === 'taxonomy') {
