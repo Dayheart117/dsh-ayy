@@ -6,7 +6,7 @@
  * markdown 本子能干前一半，干不了后一半——只能靠人肉数或者写脚本。
  */
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, appendFileSync, statSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -48,6 +48,23 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_module ON questions(module);
     CREATE INDEX IF NOT EXISTS idx_wrong ON questions(wrong);
   `)
+  // 后加的列：老库自动补（ALTER 加列，不重建表）
+  const have = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
+  for (const [col, def] of [
+    ['stem', "TEXT DEFAULT ''"],   // 题干摘要（一行能认出是哪道题，别塞材料）
+    ['ask', "TEXT DEFAULT ''"],    // 题目问法（"概括……做法"）
+    ['key', "TEXT DEFAULT ''"],    // 采分点清单（几句短句，可统计）
+    ['doc', "TEXT DEFAULT ''"],    // 完整解析在哪个本子（相对路径#锚点）
+  ]) {
+    if (!have.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
+  }
+  // WAL：读写不互相阻塞，崩溃不易坏
+  try {
+    db.exec('PRAGMA journal_mode = WAL')
+    db.exec('PRAGMA synchronous = NORMAL')
+  } catch {
+    /* 某些盘不支持 WAL，退回默认模式 */
+  }
   return db
 }
 
@@ -57,7 +74,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note']
+const FIELDS = ['day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc']
 
 function insertOne(item) {
   const d = open()
@@ -74,6 +91,10 @@ function insertOne(item) {
     seconds: item?.seconds != null && item.seconds !== '' ? Number(item.seconds) : null,
     no: item?.no != null ? String(item.no) : '',
     note: item?.note != null ? String(item.note) : '',
+    stem: item?.stem != null ? String(item.stem).slice(0, 300) : '',
+    ask: item?.ask != null ? String(item.ask).slice(0, 300) : '',
+    key: item?.key != null ? String(item.key).slice(0, 300) : '',
+    doc: item?.doc != null ? String(item.doc) : '',
     created: new Date().toISOString(),
   }
   const stmt = d.prepare(
@@ -154,15 +175,16 @@ export function apply(ctx) {
     name: 'ayy_bank',
     description:
       '你的题库：一行一题存进数据库，能按题型/错因/题源统计出现次数和错误率。\n' +
-      '· add：录题（一条或一批）。字段 day/source/module/type/ability/points/score/full/wrong/seconds/no/note，只有 type 建议必填。\n' +
-      '· stats：按题型/错因/题源/模块分组，算出现次数、错题数、错误率、平均得分率（可加 month=2026-11）。\n' +
-      '· list：按 type/wrong/source/module/month 筛，看最近几条。\n' +
-      '· update / remove：按 id 改或删。\n' +
-      '录错题时：一个题一条，别把整段解析塞进 note（解析还是写 ayy_note 的本子）。',
+      '· add（item 或 items 一批）字段：day source module type ability points score full wrong seconds no\n' +
+      '  ＋ stem（题干摘要，一行能认出是哪道题，别塞材料）· ask（问法，如"概括……做法"）\n' +
+      '  ＋ key（采分点清单，短句）· doc（完整解析在哪个本子，如 申论/概括措施-2026.md#3）· note（失分点标签，如"漏第3点"）\n' +
+      '· stats：按 type/wrong/source/module/ability 分组算次数、错题数、错误率、平均得分率（可加 month=2026-11）\n' +
+      '· list：按 type/wrong/source/module/month 筛 · update/remove：按 id · export：导 CSV 到 ayy-bank/exports/\n' +
+      '**分工**：库里只存可统计的字段 + 解析在哪；完整题干和解析写 ayy_note 的本子（题多了按题型/年份分文件）。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['type', 'wrong', 'source', 'module', 'ability'], description: 'stats 分组维度，默认 type' },
@@ -224,6 +246,23 @@ export function apply(ctx) {
         const info = d.prepare('DELETE FROM questions WHERE id = ?').run(id)
         log(`remove #${id} affected=${info.changes}`)
         return { ok: true, removed: Number(info.changes), id }
+      }
+
+      if (action === 'export') {
+        const d = open()
+        const rows = d.prepare('SELECT * FROM questions ORDER BY id').all()
+        const cols = ['id', ...FIELDS, 'created']
+        const esc = (v) => {
+          const s = v == null ? '' : String(v)
+          return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+        }
+        const csv = [cols.join(','), ...rows.map((r) => cols.map((c) => esc(r[c])).join(','))].join('\n')
+        const dir = join(DIR, 'exports')
+        mkdirSync(dir, { recursive: true })
+        const file = join(dir, 'bank-' + today().replace(/-/g, '') + '.csv')
+        writeFileSync(file, '\uFEFF' + csv + '\n', 'utf8') // BOM：Excel 打开中文不乱码
+        log(`export ${rows.length} 行 → ${file}`)
+        return { ok: true, rows: rows.length, file }
       }
 
       throw new Error(`不支持的 action：${action}`)
