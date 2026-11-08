@@ -1,0 +1,27 @@
+{
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "description":  "安源悦 · 题库：一行一题进数据库，按题型/错因统计错误率",
+    "type":  "module",
+    "version":  "0.1.0",
+    "files":  [
+                  "index.js",
+                  "cordis.patch.yml"
+              ],
+    "name":  "dsh-ayy-bank",
+    "main":  "index.js",
+    "exports":  {
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json",
+                    ".":  "./index.js"
+                },
+    "keywords":  [
+                     "dsh-plugin",
+                     "ayy",
+                     "bank",
+                     "sqlite"
+                 ]
+}
