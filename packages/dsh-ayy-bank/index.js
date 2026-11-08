@@ -6,7 +6,7 @@
  * markdown 本子能干前一半，干不了后一半——只能靠人肉数或者写脚本。
  */
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync, statSync, renameSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -17,6 +17,7 @@ const HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const DIR = join(HOME, 'ayy-bank')
 const DB = join(DIR, 'bank.db')
 const LOG = join(DIR, 'bank.log')
+const TAXONOMY = join(DIR, 'taxonomy.json')
 
 function log(msg) {
   try {
@@ -56,6 +57,7 @@ function open() {
     ['key', "TEXT DEFAULT ''"],    // 采分点清单（几句短句，可统计）
     ['doc', "TEXT DEFAULT ''"],    // 完整解析在哪个本子（相对路径#锚点）
     ['material', "TEXT DEFAULT ''"], // 材料类型：文字资料/统计表/统计图/综合资料
+    ['subject', "TEXT DEFAULT '行测'"], // 科目：行测/申论/面试
   ]) {
     if (!have.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
@@ -69,17 +71,44 @@ function open() {
   return db
 }
 
+/** 读分类表：科目 → 模块 → [题型]。读不到就返回空对象（不影响录题）。 */
+function readTaxonomy() {
+  try {
+    const raw = readFileSync(TAXONOMY, 'utf8').replace(/^\uFEFF/, '')
+    const j = JSON.parse(raw)
+    const out = {}
+    for (const [sub, mods] of Object.entries(j)) {
+      if (sub.startsWith('_') || !mods || typeof mods !== 'object') continue
+      out[sub] = mods
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/** 这个题型在分类表里吗？返回 { known, subject, module, siblings } */
+function checkType(subject, module, type) {
+  const tax = readTaxonomy()
+  const mods = tax[subject]
+  if (!mods) return { known: false, reason: '科目不在分类表' }
+  const list = mods[module]
+  if (!list) return { known: false, reason: '模块不在分类表' }
+  return { known: list.includes(type), siblings: list }
+}
+
 const today = () => {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material']
 
 function insertOne(item) {
   const d = open()
   const row = {
+    subject: item?.subject != null ? String(item.subject) : '行测',
     day: String(item?.day || today()).slice(0, 10),
     source: item?.source != null ? String(item.source) : '',
     module: item?.module != null ? String(item.module) : '',
@@ -110,7 +139,7 @@ function insertOne(item) {
 /** 分组统计：出现次数 / 错误数 / 错误率 / 平均得分率 */
 function statsOf(groupBy, month, sourceFilter) {
   const d = open()
-  const col = ['type', 'wrong', 'source', 'module', 'ability', 'material'].includes(groupBy) ? groupBy : 'type'
+  const col = ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'].includes(groupBy) ? groupBy : 'type'
   const where = []
   const args = []
   if (month) {
@@ -150,7 +179,7 @@ function listRows(filters, limit) {
   const d = open()
   const where = []
   const args = []
-  const map = { type: 'type', wrong: 'wrong', source: 'source', module: 'module', material: 'material', month: null }
+  const map = { subject: 'subject', type: 'type', wrong: 'wrong', source: 'source', module: 'module', material: 'material', month: null }
   for (const k of Object.keys(map)) {
     const v = filters?.[k]
     if (v == null || v === '') continue
@@ -191,11 +220,12 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
-        groupBy: { type: 'string', enum: ['type', 'wrong', 'source', 'module', 'ability', 'material'], description: 'stats 分组维度，默认 type' },
+        groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'], description: 'stats 分组维度，默认 type' },
         material: { type: 'string', description: '材料类型：文字资料/统计表/统计图/综合资料（资料分析用）' },
+        subject: { type: 'string', description: '科目：行测/申论/面试，默认 行测' },
         month: { type: 'string', description: 'stats/list 限定月份，如 2026-11' },
         type: { type: 'string', description: 'list 筛选：题型' },
         wrong: { type: 'string', description: 'list 筛选：错因' },
@@ -218,7 +248,19 @@ export function apply(ctx) {
         for (const it of items) ids.push(insertOne(it).id)
         const total = open().prepare('SELECT COUNT(*) AS n FROM questions').get().n
         log(`add ${ids.length} 条 → 库里共 ${total}`)
-        return { ok: true, added: ids.length, ids, total }
+        // 分类表里没有的题型提一句——不拦，只是让她知道可以补进表里
+        const unknown = new Map()
+        for (const it of items) {
+          const sub = it.subject || '行测'
+          const mod = it.module || ''
+          const t = it.type || ''
+          if (!t) continue
+          if (!checkType(sub, mod, t).known) unknown.set(`${sub}/${mod}/${t}`, true)
+        }
+        return {
+          ok: true, added: ids.length, ids, total,
+          ...(unknown.size ? { 新题型: [...unknown.keys()], 提示: '这些题型不在 taxonomy.json 里；用得多了可以加进去，或者就这么放着也行' } : {}),
+        }
       }
 
       if (action === 'stats') {
@@ -229,7 +271,7 @@ export function apply(ctx) {
       }
 
       if (action === 'list') {
-        const rows = listRows({ type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, material: args?.material, month: args?.month }, args?.limit)
+        const rows = listRows({ subject: args?.subject, type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, material: args?.material, month: args?.month }, args?.limit)
         return { count: rows.length, items: rows.length ? rows : '（没有匹配的题）' }
       }
 
@@ -254,6 +296,24 @@ export function apply(ctx) {
         const info = d.prepare('DELETE FROM questions WHERE id = ?').run(id)
         log(`remove #${id} affected=${info.changes}`)
         return { ok: true, removed: Number(info.changes), id }
+      }
+
+if (action === 'taxonomy') {
+        const tax = readTaxonomy()
+        const subj = String(args?.subject || '').trim()
+        const rows = open().prepare('SELECT subject, module, type, COUNT(*) n FROM questions GROUP BY subject, module, type').all()
+        const count = (s, m, t) => (rows.find((r) => r.subject === s && r.module === m && r.type === t) || {}).n || 0
+        const out = {}
+        for (const [s, mods] of Object.entries(tax)) {
+          if (subj && s !== subj) continue
+          out[s] = {}
+          for (const [m, types] of Object.entries(mods)) {
+            out[s][m] = types.length
+              ? types.map((t) => `${t}(${count(s, m, t)})`)
+              : [`（题型待补，已有 ${rows.filter((r) => r.subject === s && r.module === m).length} 题）`]
+          }
+        }
+        return { 说明: '括号里是库里已有的题数。题型可以随时往 taxonomy.json 里加。', tree: out }
       }
 
       if (action === 'export') {
