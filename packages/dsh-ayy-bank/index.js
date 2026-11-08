@@ -123,20 +123,25 @@ function statsOf(groupBy, month, sourceFilter) {
     SELECT COALESCE(NULLIF(${col}, ''), '(未填)') AS key,
            COUNT(*) AS n,
            SUM(CASE WHEN score IS NOT NULL AND full IS NOT NULL AND score < full THEN 1 ELSE 0 END) AS wrong_n,
+           SUM(CASE WHEN score IS NULL THEN 1 ELSE 0 END) AS unknown_n,
            AVG(CASE WHEN score IS NOT NULL AND full IS NOT NULL AND full > 0 THEN score * 1.0 / full END) AS rate
     FROM questions
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    GROUP BY key
+    GROUP BY 1
     ORDER BY n DESC
   `
   const rows = d.prepare(sql).all(...args)
-  return rows.map((r) => ({
-    项: r.key,
-    题数: r.n,
-    错题数: r.wrong_n,
-    错误率: r.n ? Math.round((r.wrong_n / r.n) * 100) + '%' : '—',
-    平均得分率: r.rate == null ? '—' : Math.round(r.rate * 100) + '%',
-  }))
+  return rows.map((r) => {
+    const labeled = r.n - r.unknown_n // 只按"明确标了对错"的算错误率
+    return {
+      项: r.key,
+      题数: r.n,
+      错题数: r.wrong_n,
+      未标: r.unknown_n,
+      错误率: labeled > 0 ? Math.round((r.wrong_n / labeled) * 100) + '%' : '—',
+      平均得分率: r.rate == null ? '—' : Math.round(r.rate * 100) + '%',
+    }
+  })
 }
 
 function listRows(filters, limit) {
