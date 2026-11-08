@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, appendFileSync, statSync, renameSync, readFileSy
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { embed, pack, unpack, cosine, hashOf, localUp } from './lib/vector.js'
 
 export const name = 'dsh-ayy-archive'
 export const inject = ['tools']
@@ -57,6 +58,15 @@ function open() {
   if (db) return db
   if (!existsSync(DB)) return null
   db = new DatabaseSync(DB)
+  // 插件自己也要建这两张表：还没跑过 ingest 时 forget / 向量也得能工作
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tombstones (kind TEXT, value TEXT, at TEXT, PRIMARY KEY (kind, value));
+      CREATE TABLE IF NOT EXISTS vecs (id TEXT PRIMARY KEY, model TEXT, dim INTEGER, v BLOB, text_hash TEXT, at TEXT);
+    `)
+  } catch {
+    /* 建表失败不阻塞检索 */
+  }
   return db
 }
 
@@ -131,7 +141,7 @@ function grams(s, n) {
   return [...out]
 }
 
-function search(q, opts) {
+async function search(q, opts) {
   const d = open()
   if (!d) return []
   const limit = Math.max(1, Math.min(Number(opts?.limit) || 5, 20))
@@ -171,19 +181,60 @@ function search(q, opts) {
       agg.set(r.id, cur)
     }
   }
-  // 相关性门槛：命中的内容字符要占查询内容的大半
+  // 关键词候选（还没过滤）
+  const cand0 = [...agg.values()]
+  // ---- 语义只做「加分」，不独立召回（实测纯余弦分不开正负样本：正 0.505 < 负 0.548）----
+  let semOn = false
+  if (await localUp(1200)) {
+    const qv = await embed(q)
+    if (qv) {
+      semOn = true
+      const where = []
+      const args = []
+      if (o.sessions && o.sessions.length) { where.push('c.session IN (' + o.sessions.map(() => '?').join(',') + ')'); args.push(...o.sessions) }
+      if (o.scopeShow) { where.push('c.scope = ?'); args.push(o.scopeShow) }
+      if (o.dayFrom) { where.push('c.day >= ?'); args.push(o.dayFrom) }
+      if (o.dayTo) { where.push('c.day <= ?'); args.push(o.dayTo) }
+      const vecMap = new Map()
+      for (const v of d.prepare('SELECT v.id, v.v AS vec, c.session, c.scope, c.day, c.meta, c.text, c.chars FROM vecs v JOIN chunks c ON c.id = v.id' + (where.length ? ' WHERE ' + where.join(' AND ') : '')).all(...args)) {
+        vecMap.set(v.id, v)
+      }
+      const kwMax = cand0.reduce((m, r) => Math.max(m, r.score || 0), 1)
+      // 1) 给关键词候选算 cos
+      for (const r of cand0) {
+        const v = vecMap.get(r.id)
+        if (!v) continue
+        r.cos = cosine(qv, unpack(v.vec))
+        const kw = (r.score || 0) / kwMax
+        r.score = 0.85 * kw + 0.15 * Math.max(0, r.cos) // 语义只当小幅加分，排序仍以关键词为主
+      }
+      // 2) 高置信度的纯语义结果才可以自己进来
+      for (const [id, v] of vecMap) {
+        if (agg.has(id)) continue
+        const cos = cosine(qv, unpack(v.vec))
+        if (cos < 0.62) continue
+        cand0.push({
+          id, day: v.day, session: v.session, scope: v.scope, chars: v.chars, meta: v.meta,
+          s: String(v.text).slice(0, 140), terms: new Set(), hits: 1, coverage: cos, cos, how: 'VEC',
+          score: -1, // 纯语义补位：永远排在关键词结果后面
+        })
+      }
+    }
+  }
+  // 相关性门槛：关键词覆盖够，或者语义足够确定
   const MIN_COVERAGE = 0.5
+  const MIN_COS_ALONE = 0.62
   const out = []
-  for (const r of agg.values()) {
+  for (const r of cand0) {
     const covered = new Set([...r.terms].flatMap((t) => [...t].filter((c) => plain.includes(c)))).size
     const coverage = Math.min(1, covered / Math.max(1, new Set(qChars).size))
-    if (coverage < MIN_COVERAGE) continue
-    if (r.meta) r.score *= 0.3 // 元对话降权，不删
     r.coverage = coverage
-    r.hits = r.terms.size
+    const pass = coverage >= MIN_COVERAGE || (semOn && (r.cos || 0) >= MIN_COS_ALONE)
+    if (!pass) continue
+    if (r.meta) r.score *= 0.3 // 元对话降权
+    r.hits = r.terms.size || 1
     out.push(r)
   }
-  out.sort((a, b) => b.score - a.score || (b.day || '').localeCompare(a.day || ''))
   return out.slice(0, limit)
 }
 
@@ -209,7 +260,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['search', 'get', 'stats', 'ingest'], description: '默认 search' },
+        action: { type: 'string', enum: ['search', 'get', 'stats', 'ingest', 'forget', 'reindex'], description: '默认 search' },
         query: { type: 'string', description: 'search：想找的话（可以是原话片段）' },
         id: { type: 'string', description: 'get：检索结果里的 id' },
         since: { type: 'string', description: '起始日期 YYYY-MM-DD' },
@@ -217,6 +268,8 @@ export function apply(ctx) {
         session: { type: 'string', description: '限定某个会话 id' },
         scope: { type: 'string', enum: ['her', 'her_all', 'private', 'group', 'all'], description: '默认 her=只她的私聊；her_all=含群；all=连开发对话' },
         limit: { type: 'integer', description: '返回条数，默认 5' },
+        by: { type: 'string', enum: ['id', 'day', 'session'], description: 'forget：按什么删' },
+        value: { type: 'string', description: 'forget：id / 日期(YYYY-MM-DD) / 会话id' },
       },
       required: ['action'],
     },
@@ -227,7 +280,7 @@ export function apply(ctx) {
       if (action === 'search') {
         const q = String(args?.query || '').trim()
         if (!q) throw new Error('search 需要 query')
-        const rows = search(q, args)
+        const rows = await search(q, args)
         log(`search「${q}」→ ${rows.length} 条`)
         if (!rows.length) return { count: 0, 说法: `库里没找到「${q}」。要么真没聊过，要么那段还没入（可以 ingest 补上）。` }
         return {
@@ -245,6 +298,58 @@ export function apply(ctx) {
         const r = d && d.prepare('SELECT * FROM chunks WHERE id = ?').get(id)
         if (!r) throw new Error(`没有 id=${id} 的片段`)
         return { id: r.id, day: r.day, session: r.session, scope: r.scope, 字数: r.chars, 原文: r.text }
+      }
+
+      if (action === 'reindex') {
+        const d = open()
+        if (!d) throw new Error('库还没建')
+        if (!(await localUp())) return { ok: false, 提示: '本地模型没开：先 ayy_local(action:"up")' }
+        const rows = d.prepare(`SELECT c.id, c.text FROM chunks c
+          LEFT JOIN vecs v ON v.id = c.id WHERE v.id IS NULL`).all()
+        let ok = 0
+        let fail = 0
+        for (const r of rows) {
+          const h = hashOf(String(r.text).slice(0, 500))
+          const v = await embed(String(r.text).slice(0, 800))
+          if (!v) { fail++; continue }
+          d.prepare('INSERT OR REPLACE INTO vecs (id, model, dim, v, text_hash, at) VALUES (?,?,?,?,?,?)').run(
+            r.id, 'bge-m3', v.length, pack(v), h, new Date().toISOString(),
+          )
+          ok++
+        }
+        log(`reindex: ${ok} 成功 / ${fail} 失败`)
+        return { ok: true, 待建: rows.length, 已建: ok, 失败: fail }
+      }
+
+      if (action === 'forget') {
+        const d = open()
+        if (!d) throw new Error('库还没建')
+        const by = String(args?.by || '')
+        const value = String(args?.value || '').trim()
+        if (!by || !value) throw new Error('forget 需要 by + value')
+        if (!['id', 'day', 'session'].includes(by)) throw new Error('by 只能是 id / day / session')
+        // 1) 找出要删的
+        const rows =
+          by === 'id'
+            ? d.prepare('SELECT id FROM chunks WHERE id = ?').all(value)
+            : by === 'day'
+              ? d.prepare('SELECT id FROM chunks WHERE day = ?').all(value)
+              : d.prepare('SELECT id FROM chunks WHERE session = ?').all(value)
+        // 2) 立墓碑（重新入库不许回来）
+        d.prepare('INSERT OR REPLACE INTO tombstones (kind, value, at) VALUES (?,?,?)').run(by, value, new Date().toISOString())
+        // 3) 正文 + 索引一起删
+        for (const r of rows) {
+          d.prepare('DELETE FROM chunks WHERE id = ?').run(r.id)
+          d.prepare('DELETE FROM chunks_fts WHERE id = ?').run(r.id)
+          try { d.prepare('DELETE FROM vecs WHERE id = ?').run(r.id) } catch { /* 向量表可能还没有 */ }
+        }
+        log(`forget ${by}=${value} → 删了 ${rows.length} 片`)
+        return {
+          ok: true,
+          删了: rows.length,
+          已立墓碑: `${by}=${value}`,
+          注意: '库里的正文和索引都删了；原始会话文件（sessions/*.zstd）还在，那是底层存档，要清得另外处理',
+        }
       }
 
       if (action === 'stats') {

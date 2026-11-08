@@ -166,6 +166,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_session ON chunks(session);
   CREATE INDEX IF NOT EXISTS idx_scope ON chunks(scope);
 `)
+// 墓碑：forget 掉的东西，重新入库时不许回来
+db.exec(`CREATE TABLE IF NOT EXISTS tombstones (
+  kind TEXT, value TEXT, at TEXT, PRIMARY KEY (kind, value)
+)`)
+
 // 记录每个会话文件处理到哪（size+mtime）→ 没变就跳过
 db.exec(`CREATE TABLE IF NOT EXISTS files (
   session TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, chunks INTEGER, at TEXT
@@ -229,6 +234,9 @@ for (const f of files) {
     if (LIMIT && added >= LIMIT) break
     const text = group.map((m) => m.text).join('\n')
     const id = createHash('sha1').update(f.session + '|' + (group[0].id || group[0].time) + '|' + text.slice(0, 300)).digest('hex').slice(0, 16)
+    const day = dayOf(Math.min(...group.map((m) => m.time || 0)) || 0)
+    const tomb = db.prepare(`SELECT 1 FROM tombstones WHERE (kind='chunk' AND value=?) OR (kind='day' AND value=?) OR (kind='session' AND value=?) LIMIT 1`).get(id, day, f.session)
+    if (tomb) { skipped++; continue }
     const exists = db.prepare('SELECT 1 FROM chunks WHERE id = ?').get(id)
     if (exists && !FORCE) {
       skipped++
