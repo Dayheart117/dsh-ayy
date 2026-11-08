@@ -55,6 +55,7 @@ function open() {
     ['ask', "TEXT DEFAULT ''"],    // 题目问法（"概括……做法"）
     ['key', "TEXT DEFAULT ''"],    // 采分点清单（几句短句，可统计）
     ['doc', "TEXT DEFAULT ''"],    // 完整解析在哪个本子（相对路径#锚点）
+    ['material', "TEXT DEFAULT ''"], // 材料类型：文字资料/统计表/统计图/综合资料
   ]) {
     if (!have.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
@@ -74,7 +75,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc']
+const FIELDS = ['day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material']
 
 function insertOne(item) {
   const d = open()
@@ -95,6 +96,7 @@ function insertOne(item) {
     ask: item?.ask != null ? String(item.ask).slice(0, 300) : '',
     key: item?.key != null ? String(item.key).slice(0, 300) : '',
     doc: item?.doc != null ? String(item.doc) : '',
+    material: item?.material != null ? String(item.material) : '',
     created: new Date().toISOString(),
   }
   const stmt = d.prepare(
@@ -108,7 +110,7 @@ function insertOne(item) {
 /** 分组统计：出现次数 / 错误数 / 错误率 / 平均得分率 */
 function statsOf(groupBy, month, sourceFilter) {
   const d = open()
-  const col = ['type', 'wrong', 'source', 'module', 'ability'].includes(groupBy) ? groupBy : 'type'
+  const col = ['type', 'wrong', 'source', 'module', 'ability', 'material'].includes(groupBy) ? groupBy : 'type'
   const where = []
   const args = []
   if (month) {
@@ -148,7 +150,7 @@ function listRows(filters, limit) {
   const d = open()
   const where = []
   const args = []
-  const map = { type: 'type', wrong: 'wrong', source: 'source', module: 'module', month: null }
+  const map = { type: 'type', wrong: 'wrong', source: 'source', module: 'module', material: 'material', month: null }
   for (const k of Object.keys(map)) {
     const v = filters?.[k]
     if (v == null || v === '') continue
@@ -192,7 +194,8 @@ export function apply(ctx) {
         action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
-        groupBy: { type: 'string', enum: ['type', 'wrong', 'source', 'module', 'ability'], description: 'stats 分组维度，默认 type' },
+        groupBy: { type: 'string', enum: ['type', 'wrong', 'source', 'module', 'ability', 'material'], description: 'stats 分组维度，默认 type' },
+        material: { type: 'string', description: '材料类型：文字资料/统计表/统计图/综合资料（资料分析用）' },
         month: { type: 'string', description: 'stats/list 限定月份，如 2026-11' },
         type: { type: 'string', description: 'list 筛选：题型' },
         wrong: { type: 'string', description: 'list 筛选：错因' },
@@ -226,7 +229,7 @@ export function apply(ctx) {
       }
 
       if (action === 'list') {
-        const rows = listRows({ type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, month: args?.month }, args?.limit)
+        const rows = listRows({ type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, material: args?.material, month: args?.month }, args?.limit)
         return { count: rows.length, items: rows.length ? rows : '（没有匹配的题）' }
       }
 
