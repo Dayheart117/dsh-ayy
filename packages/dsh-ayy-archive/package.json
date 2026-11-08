@@ -1,0 +1,27 @@
+{
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "description":  "安源悦 · 对话史：翻\"我们以前聊过什么\"（全文检索 + 引用回原文）",
+    "type":  "module",
+    "version":  "0.1.0",
+    "files":  [
+                  "index.js",
+                  "cordis.patch.yml"
+              ],
+    "name":  "dsh-ayy-archive",
+    "main":  "index.js",
+    "exports":  {
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json",
+                    ".":  "./index.js"
+                },
+    "keywords":  [
+                     "dsh-plugin",
+                     "ayy",
+                     "archive",
+                     "search"
+                 ]
+}
