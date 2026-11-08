@@ -104,45 +104,87 @@ function searchOnce(d, term, o, limit) {
 }
 
 /** 混合检索：多词拆开分别找，按命中词数 + 时间合并排序 */
+/** 词的稀有度：库里出现得越少越值钱（idf = ln(N / (1+df))） */
+function idfOf(d, term, total) {
+  try {
+    const df = d.prepare('SELECT COUNT(*) n FROM chunks WHERE text LIKE ?').get(`%${term}%`).n
+    return Math.log((total + 1) / (df + 1)) + 0.5 // +0.5 保证常见词也不至于 0
+  } catch {
+    return 1
+  }
+}
+
+// 虚词：不参与相关性计算（不然"怎么做/是什么/我们聊过"会把覆盖度撑大）
+const FILLER = /(我们|你们|他们|聊过|说过|一下|一个|什么|怎么|怎样|为什么|是不是|有没有|能不能|可以|需要|应该|关于|这个|那个|哪些|哪家|哪个|如何|以及|还有|的话|这事|那次|时间|时候|区别|吗|呢|吧|啊|的|了|是|有|和|与|在|我|你|他|她|它|就|都|也|还|又|把|被|给|让|说)/g
+
+function contentOf(q) {
+  return String(q || '')
+    .replace(FILLER, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+}
+
+function grams(s, n) {
+  const c = [...s]
+  const out = new Set()
+  for (let i = 0; i + n <= c.length; i++) out.add(c.slice(i, i + n).join(''))
+  return [...out]
+}
+
 function search(q, opts) {
   const d = open()
   if (!d) return []
   const limit = Math.max(1, Math.min(Number(opts?.limit) || 5, 20))
   const scope = String(opts?.scope || 'her')
-  const hers = herSessions()
-  const herPrivate = herPrivateSessions()
   const o = {
     dayFrom: opts?.since ? String(opts.since) : '',
     dayTo: opts?.until ? String(opts.until) : '',
     session: opts?.session ? String(opts.session) : '',
-    includeMeta: scope === 'all',
+    includeMeta: true, // meta 不再硬排除，改成降权
     sessions: null,
     scopeShow: '',
   }
-  if (scope === 'her') {
-    // 默认：只她和白昼的私聊（群聊和开发对话都排除）
-    o.sessions = herPrivate
-  } else if (scope === 'herok' || scope === 'her_all') {
-    o.sessions = hers // 她的全部（含群）
-  } else if (scope === 'group' || scope === 'private') {
-    o.scopeShow = scope
+  if (scope === 'her') o.sessions = herPrivateSessions()
+  else if (scope === 'her_all') o.sessions = herSessions()
+  else if (scope === 'group' || scope === 'private') o.scopeShow = scope
+
+  const content = contentOf(q)
+  const qChars = [...content.replace(/\s+/g, '')]
+  const qLen = qChars.length || [...String(q).replace(/\s+/g, '')].length
+  const plain = qChars.join('')
+  const ts = new Set()
+  for (const w of content.split(/\s+/).filter(Boolean)) ts.add(w)
+  if (plain.length >= 2) {
+    for (const g of grams(plain, 2)) ts.add(g)
+    for (const g of grams(plain, 3)) ts.add(g)
+    for (const g of grams(plain, 4)) ts.add(g)
   }
-  const ts = terms(q)
+  const total = d.prepare('SELECT COUNT(*) n FROM chunks').get().n || 1
   const agg = new Map()
-  for (const t of ts) {
-    for (const r of searchOnce(d, t, o, limit * 2)) {
-      const cur = agg.get(r.id) || { ...r, hits: 0, terms: [] }
-      cur.hits++
-      cur.terms.push(t)
+  for (const t of [...ts]) {
+    if ([...t].length < 2) continue
+    const idf = idfOf(d, t, total)
+    for (const r of searchOnce(d, t, o, limit * 3)) {
+      const cur = agg.get(r.id) || Object.assign({}, r, { terms: new Set(), score: 0 })
+      cur.terms.add(t)
+      cur.score += idf * [...t].length * [...t].length
       agg.set(r.id, cur)
     }
   }
-// 排序：命中词数多的优先；同分时"命中的词更长"更具体（阿水<分开五年）；再按时间新
-  const weight = (r) => (r.terms || []).reduce((s, t) => s + t.length * t.length, 0)
-  const rows = [...agg.values()].sort(
-    (a, b) => b.hits - a.hits || weight(b) - weight(a) || (b.day || '').localeCompare(a.day || ''),
-  )
-  return rows.slice(0, limit)
+  // 相关性门槛：命中的内容字符要占查询内容的大半
+  const MIN_COVERAGE = 0.5
+  const out = []
+  for (const r of agg.values()) {
+    const covered = new Set([...r.terms].flatMap((t) => [...t].filter((c) => plain.includes(c)))).size
+    const coverage = Math.min(1, covered / Math.max(1, new Set(qChars).size))
+    if (coverage < MIN_COVERAGE) continue
+    if (r.meta) r.score *= 0.3 // 元对话降权，不删
+    r.coverage = coverage
+    r.hits = r.terms.size
+    out.push(r)
+  }
+  out.sort((a, b) => b.score - a.score || (b.day || '').localeCompare(a.day || ''))
+  return out.slice(0, limit)
 }
 
 
