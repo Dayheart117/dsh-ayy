@@ -66,6 +66,19 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_pn_paper ON paper_nodes(paper_id);
   `)
 
+  // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
+  // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
+  const have2 = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
+  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"]]) {
+    if (!have2.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
+  }
+  // 回填：老数据没有 path 的，用 科目/模块/题型/考点 拼一份
+  try {
+    db.exec(`UPDATE questions SET path = trim(replace(
+      coalesce(nullif(subject,''),'') || '/' || coalesce(nullif(module,''),'') || '/' ||
+      coalesce(nullif(type,''),'') || '/' || coalesce(nullif(ability,''),''), '//', '/'), '/')
+      WHERE (path IS NULL OR path = '') AND (module IS NOT NULL AND module <> '')`)
+  } catch { /* 回填失败不影响使用 */ }
   // 后加的列：老库自动补（ALTER 加列，不重建表）
   const have = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
   for (const [col, def] of [
@@ -130,7 +143,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags']
 
 function insertOne(item) {
   const d = open()
@@ -153,6 +166,17 @@ function insertOne(item) {
     key: item?.key != null ? String(item.key).slice(0, 300) : '',
     doc: item?.doc != null ? String(item.doc) : '',
     material: item?.material != null ? String(item.material) : '',
+    // path：给了就用；没给就用 科目/模块/题型/考点 拼（层级任意深）
+    path:
+      item?.path != null && String(item.path).trim()
+        ? String(item.path).trim()
+        : (() => {
+            const segs = [item?.subject || '行测', item?.module, item?.type, item?.ability]
+              .map((x) => (x == null ? '' : String(x).trim()))
+              .filter(Boolean)
+            return segs.filter((s, i) => i === 0 || s !== segs[i - 1]).join('/')
+          })(),
+    tags: Array.isArray(item?.tags) ? JSON.stringify(item.tags) : item?.tags ? String(item.tags) : '[]',
     created: new Date().toISOString(),
   }
   const stmt = d.prepare(
@@ -164,8 +188,44 @@ function insertOne(item) {
 }
 
 /** 分组统计：出现次数 / 错误数 / 错误率 / 平均得分率 */
-function statsOf(groupBy, month, sourceFilter) {
+function statsOf(groupBy, month, sourceFilter, depth, tag) {
   const d = open()
+  // 按层级统计：path 取前 depth 段（层级任意深，加层不用改表）
+  if (groupBy === 'path') {
+    const w = []
+    const a = []
+    if (month) { w.push('substr(day,1,7) = ?'); a.push(month) }
+    if (sourceFilter) { w.push('source = ?'); a.push(sourceFilter) }
+    if (tag) { w.push('tags LIKE ?'); a.push('%' + tag + '%') }
+    const rows2 = d.prepare('SELECT path, score, full FROM questions' + (w.length ? ' WHERE ' + w.join(' AND ') : '')).all(...a)
+    const g = new Map()
+    for (const r of rows2) {
+      const parts = String(r.path || '').split('/').filter(Boolean)
+      const key = parts.slice(0, Math.max(1, Number(depth) || 3)).join('/') || '(未分类)'
+      const cur = g.get(key) || { n: 0, bad: 0, unk: 0, sum: 0, cnt: 0 }
+      cur.n++
+      const sc = r.score === '' || r.score == null ? null : Number(r.score)
+      const fu = r.full === '' || r.full == null ? null : Number(r.full)
+      if (sc == null) cur.unk++
+      else if (fu && sc < fu) cur.bad++
+      if (sc != null && fu) { cur.sum += sc / fu; cur.cnt++ }
+      g.set(key, cur)
+    }
+    return [...g.entries()]
+      .map(([key, v]) => {
+        const labeled = v.n - v.unk
+        return {
+          项: key,
+          题数: v.n,
+          错题数: v.bad,
+          未标: v.unk,
+          错误率: labeled > 0 ? Math.round((v.bad / labeled) * 100) + '%' : '—',
+          平均得分率: v.cnt ? Math.round((v.sum / v.cnt) * 100) + '%' : '—',
+        }
+      })
+      .sort((x, y) => y.题数 - x.题数)
+  }
+
   const col = ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'].includes(groupBy) ? groupBy : 'type'
   const where = []
   const args = []
@@ -217,6 +277,11 @@ function listRows(filters, limit) {
       where.push(`${map[k]} = ?`)
       args.push(String(v))
     }
+  }
+  if (filters?.path) {
+    // 按层级前缀筛：'行测/判断推理' 会带上它下面所有题型和考点
+    where.push('path LIKE ?')
+    args.push(String(filters.path) + '%')
   }
   const sql = `SELECT * FROM questions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`
   const rows = d.prepare(sql).all(...args, Math.max(1, Math.min(Number(limit) || 20, 200)))
@@ -301,7 +366,7 @@ export function apply(ctx) {
         action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
-        groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'], description: 'stats 分组维度，默认 type' },
+        groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
         material: { type: 'string', description: '材料类型：文字资料/统计表/统计图/综合资料（资料分析用）' },
         subject: { type: 'string', description: '科目：行测/申论/面试，默认 行测' },
         paper: { type: 'object', additionalProperties: true, description: 'report：整卷成绩 {day, source, subject, total, right, wrong, seconds, score, nodes:[{module,type,ability,total,right,seconds}]}' },
@@ -314,6 +379,10 @@ export function apply(ctx) {
         patch: { type: 'object', additionalProperties: true, description: 'update 要改的字段' },
         limit: { type: 'integer', description: 'list/search 返回条数，默认 list 20 / search 8' },
         query: { type: 'string', description: 'search：想找什么（可以是一句大白话）' },
+        depth: { type: 'integer', description: 'stats groupBy=path 时统计到第几层，默认 3' },
+        tag: { type: 'string', description: '按标签过滤，如 材料:统计表' },
+        path: { type: 'string', description: 'add/list：完整层级路径，如 行测/判断推理/图形推理/数量规律/线' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'add：正交维度标签，如 ["材料:统计表"]' },
       },
       required: ['action'],
     },
@@ -347,14 +416,14 @@ export function apply(ctx) {
       }
 
       if (action === 'stats') {
-        const rows = statsOf(String(args?.groupBy || 'type'), args?.month, args?.source)
+        const rows = statsOf(String(args?.groupBy || 'type'), args?.month, args?.source, args?.depth, args?.tag)
         const total = open().prepare('SELECT COUNT(*) AS n FROM questions').get().n
         log(`stats by ${args?.groupBy || 'type'} → ${rows.length} 组`)
         return { groupBy: args?.groupBy || 'type', month: args?.month || '全部', 总题数: total, rows: rows.length ? rows : '（还没有题）' }
       }
 
       if (action === 'list') {
-        const rows = listRows({ subject: args?.subject, type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, material: args?.material, month: args?.month }, args?.limit)
+        const rows = listRows({ subject: args?.subject, type: args?.type, wrong: args?.wrong, source: args?.source, module: args?.module, material: args?.material, month: args?.month, path: args?.path }, args?.limit)
         return { count: rows.length, items: rows.length ? rows : '（没有匹配的题）' }
       }
 
