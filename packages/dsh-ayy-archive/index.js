@@ -141,7 +141,7 @@ async function search(q, opts) {
     dayFrom: opts?.since ? String(opts.since) : '',
     dayTo: opts?.until ? String(opts.until) : '',
     session: opts?.session ? String(opts.session) : '',
-    includeMeta: true, // meta 不再硬排除，改成降权
+    includeMeta: scope === 'all', // 元对话默认硬排除；只有 scope=all（连开发对话）才带上
     sessions: null,
     scopeShow: '',
   }
@@ -204,6 +204,7 @@ async function subRecall(q, args, exclude) {
   if (scope === 'her') { const s2 = herPrivateSessions(); if (s2.length) { where.push('c.session IN (' + s2.map(() => '?').join(',') + ')'); params.push(...s2) } }
   else if (scope === 'her_all') { const s3 = herSessions(); if (s3.length) { where.push('c.session IN (' + s3.map(() => '?').join(',') + ')'); params.push(...s3) } }
   else if (scope === 'group' || scope === 'private') { where.push('c.scope = ?'); params.push(scope) }
+  where.push('c.meta = 0') // 元对话不进兜底召回（否则今天贴进来的测试题会把所有查询都命中）
   if (args?.since) { where.push('c.day >= ?'); params.push(String(args.since)) }
   if (args?.until) { where.push('c.day <= ?'); params.push(String(args.until)) }
   const subs = d.prepare('SELECT s.chunk_id, s.text, s.v AS vec, c.day, c.session, c.scope, c.chars FROM subvecs s JOIN chunks c ON c.id = s.chunk_id' + (where.length ? ' WHERE ' + where.join(' AND ') : '')).all(...params)
@@ -211,7 +212,7 @@ async function subRecall(q, args, exclude) {
   for (const s of subs) {
     if (has.has(s.chunk_id)) continue
     const cos = cosine(qv, unpack(s.vec))
-    if (cos < 0.6) continue
+    if (cos < 0.65) continue
     const prev = best.get(s.chunk_id)
     if (!prev || cos > prev.cos) best.set(s.chunk_id, { cos, text: s.text, s })
   }
@@ -263,7 +264,7 @@ export function apply(ctx) {
         if (!q) throw new Error('search 需要 query')
         let rows = await search(q, args)
         // 关键词不够数时，用子片向量补位（排后面，只做兜底召回）
-        if (rows.length < (Number(args?.limit) || 5)) {
+        if (rows.length === 0) {
           try {
             const extra = await subRecall(q, args, rows)
             rows = rows.concat(extra)
