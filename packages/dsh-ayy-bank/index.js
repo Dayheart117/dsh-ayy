@@ -65,6 +65,19 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_pn_paper ON paper_nodes(paper_id);
   `)
+  // 卷子节点也要有 path，才能和题目级统计合到一棵树上
+  try {
+    const hasPn = new Set(db.prepare('PRAGMA table_info(paper_nodes)').all().map((r) => r.name))
+    if (!hasPn.has('path')) db.exec("ALTER TABLE paper_nodes ADD COLUMN path TEXT DEFAULT ''")
+    db.exec(`UPDATE paper_nodes SET path = (
+      SELECT coalesce(p.subject,'') || '/' || coalesce(paper_nodes.module,'') || '/' ||
+             coalesce(paper_nodes.type,'') || '/' || coalesce(paper_nodes.ability,'')
+      FROM papers p WHERE p.id = paper_nodes.paper_id)
+      WHERE path IS NULL OR path = ''`)
+    db.exec(`UPDATE paper_nodes SET path = trim(replace(replace(path,'//','/'),'//','/'),'/')`)
+  } catch { /* 老库结构异常不影响统计 */ }
+  db.exec(`
+  `)
 
   // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
   // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
@@ -190,26 +203,75 @@ function insertOne(item) {
 /** 分组统计：出现次数 / 错误数 / 错误率 / 平均得分率 */
 function statsOf(groupBy, month, sourceFilter, depth, tag) {
   const d = open()
+  // 整卷对账：卷面写了多少 vs 子节点加起来多少（粉笔的考点会重叠，允许对不上）
+  if (groupBy === 'paper') {
+    const ps = d.prepare('SELECT * FROM papers ORDER BY day DESC, id DESC').all()
+    return ps.map((p) => {
+      const agg = d.prepare('SELECT SUM(total) t, SUM(right_n) r, COUNT(*) k FROM paper_nodes WHERE paper_id = ?').get(p.id)
+      const nodeTotal = agg.t || 0
+      const nodeRight = agg.r || 0
+      return {
+        卷子: `${p.day} ${p.source}`,
+        卷面: `${p.right_n ?? '?'}/${p.total ?? '?'}`,
+        节点合计: `${nodeRight}/${nodeTotal}`,
+        差额: p.total != null && nodeTotal ? (nodeTotal - p.total) + ' 题' : '—',
+        节点数: agg.k || 0,
+        说明:
+          p.total == null || !nodeTotal
+            ? '没录节点'
+            : nodeTotal < p.total
+              ? '节点没录全（常见：只录了错点节点）'
+              : nodeTotal > p.total
+                ? '子节点有重叠（粉笔考点会重复归类，正常）'
+                : '对上了',
+      }
+    })
+  }
+
   // 按层级统计：path 取前 depth 段（层级任意深，加层不用改表）
   if (groupBy === 'path') {
-    const w = []
-    const a = []
-    if (month) { w.push('substr(day,1,7) = ?'); a.push(month) }
-    if (sourceFilter) { w.push('source = ?'); a.push(sourceFilter) }
-    if (tag) { w.push('tags LIKE ?'); a.push('%' + tag + '%') }
-    const rows2 = d.prepare('SELECT path, score, full FROM questions' + (w.length ? ' WHERE ' + w.join(' AND ') : '')).all(...a)
+    const fromWhat = String(arguments[5] || 'both') // both=题目级+卷子节点级都算
     const g = new Map()
-    for (const r of rows2) {
-      const parts = String(r.path || '').split('/').filter(Boolean)
+    const addRow = (path, sc, fu) => {
+      const parts = String(path || '').split('/').filter(Boolean)
       const key = parts.slice(0, Math.max(1, Number(depth) || 3)).join('/') || '(未分类)'
-      const cur = g.get(key) || { n: 0, bad: 0, unk: 0, sum: 0, cnt: 0 }
+      const cur = g.get(key) || { n: 0, bad: 0, unk: 0, sum: 0, cnt: 0, q: 0, p: 0 }
       cur.n++
-      const sc = r.score === '' || r.score == null ? null : Number(r.score)
-      const fu = r.full === '' || r.full == null ? null : Number(r.full)
-      if (sc == null) cur.unk++
-      else if (fu && sc < fu) cur.bad++
-      if (sc != null && fu) { cur.sum += sc / fu; cur.cnt++ }
+      cur.q += 1
+      const s = sc === '' || sc == null ? null : Number(sc)
+      const f = fu === '' || fu == null ? null : Number(fu)
+      if (s == null) cur.unk++
+      else if (f && s < f) cur.bad++
+      if (s != null && f) { cur.sum += s / f; cur.cnt++ }
       g.set(key, cur)
+    }
+    // 1) 题目级
+    if (fromWhat !== 'papers') {
+      const w = []
+      const a = []
+      if (month) { w.push('substr(day,1,7) = ?'); a.push(month) }
+      if (sourceFilter) { w.push('source = ?'); a.push(sourceFilter) }
+      if (tag) { w.push('tags LIKE ?'); a.push('%' + tag + '%') }
+      const rows2 = d.prepare('SELECT path, score, full FROM questions' + (w.length ? ' WHERE ' + w.join(' AND ') : '')).all(...a)
+      for (const r of rows2) addRow(r.path, r.score, r.full)
+    }
+    // 2) 卷子节点级（一张卷一个节点一行，total 就是这个节点的题数）
+    if (fromWhat !== 'questions') {
+      const w = []
+      const a = []
+      if (month) { w.push("substr(p.day,1,7) = ?"); a.push(month) }
+      if (sourceFilter) { w.push('p.source = ?'); a.push(sourceFilter) }
+      const rows3 = d.prepare('SELECT n.path, n.right_n, n.total FROM paper_nodes n JOIN papers p ON p.id = n.paper_id' + (w.length ? ' WHERE ' + w.join(' AND ') : '')).all(...a)
+      for (const r of rows3) {
+        const parts = String(r.path || '').split('/').filter(Boolean)
+        const key = parts.slice(0, Math.max(1, Number(depth) || 3)).join('/') || '(未分类)'
+        const cur = g.get(key) || { n: 0, bad: 0, unk: 0, sum: 0, cnt: 0, q: 0, p: 0 }
+        cur.n += Number(r.total) || 0
+        cur.p += Number(r.total) || 0
+        cur.bad += Math.max(0, (Number(r.total) || 0) - (Number(r.right_n) || 0))
+        if (r.total) { cur.sum += (Number(r.right_n) || 0) / Number(r.total); cur.cnt++ }
+        g.set(key, cur)
+      }
     }
     return [...g.entries()]
       .map(([key, v]) => {
@@ -221,10 +283,12 @@ function statsOf(groupBy, month, sourceFilter, depth, tag) {
           未标: v.unk,
           错误率: labeled > 0 ? Math.round((v.bad / labeled) * 100) + '%' : '—',
           平均得分率: v.cnt ? Math.round((v.sum / v.cnt) * 100) + '%' : '—',
+          ...(fromWhat === 'both' ? { 来自: `题目${v.q}行/卷子${v.p}题` } : {}),
         }
       })
       .sort((x, y) => y.题数 - x.题数)
   }
+
 
   const col = ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material'].includes(groupBy) ? groupBy : 'type'
   const where = []
@@ -380,6 +444,7 @@ export function apply(ctx) {
         limit: { type: 'integer', description: 'list/search 返回条数，默认 list 20 / search 8' },
         query: { type: 'string', description: 'search：想找什么（可以是一句大白话）' },
         depth: { type: 'integer', description: 'stats groupBy=path 时统计到第几层，默认 3' },
+        from: { type: 'string', enum: ['both', 'questions', 'papers'], description: 'stats 数据来源：both=题目+整卷节点（默认），questions=只逐题，papers=只整卷' },
         tag: { type: 'string', description: '按标签过滤，如 材料:统计表' },
         path: { type: 'string', description: 'add/list：完整层级路径，如 行测/判断推理/图形推理/数量规律/线' },
         tags: { type: 'array', items: { type: 'string' }, description: 'add：正交维度标签，如 ["材料:统计表"]' },
@@ -416,7 +481,7 @@ export function apply(ctx) {
       }
 
       if (action === 'stats') {
-        const rows = statsOf(String(args?.groupBy || 'type'), args?.month, args?.source, args?.depth, args?.tag)
+        const rows = statsOf(String(args?.groupBy || 'type'), args?.month, args?.source, args?.depth, args?.tag, args?.from)
         const total = open().prepare('SELECT COUNT(*) AS n FROM questions').get().n
         log(`stats by ${args?.groupBy || 'type'} → ${rows.length} 组`)
         return { groupBy: args?.groupBy || 'type', month: args?.month || '全部', 总题数: total, rows: rows.length ? rows : '（还没有题）' }
@@ -499,9 +564,13 @@ export function apply(ctx) {
         )
         const pid = Number(info.lastInsertRowid)
         const nodes = Array.isArray(p2.nodes) ? p2.nodes : []
-        const ins = d.prepare('INSERT INTO paper_nodes (paper_id, module, type, ability, total, right_n, seconds) VALUES (?,?,?,?,?,?,?)')
+        const ins = d.prepare('INSERT INTO paper_nodes (paper_id, module, type, ability, total, right_n, seconds, path) VALUES (?,?,?,?,?,?,?,?)')
         for (const n of nodes) {
-          ins.run(pid, String(n.module || ''), String(n.type || ''), String(n.ability || ''), n.total ?? null, n.right ?? null, n.seconds ?? null)
+          const segs = [String(p2.subject || '行测'), n.module, n.type, n.ability]
+            .map((x) => (x == null ? '' : String(x).trim()))
+            .filter(Boolean)
+          const pth = segs.filter((s, i) => i === 0 || s !== segs[i - 1]).join('/')
+          ins.run(pid, String(n.module || ''), String(n.type || ''), String(n.ability || ''), n.total ?? null, n.right ?? null, n.seconds ?? null, pth)
         }
         log(`report #${pid} ${p2.source || ''} nodes=${nodes.length}`)
         return { ok: true, paper_id: pid, 节点数: nodes.length }
