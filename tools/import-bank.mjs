@@ -31,6 +31,44 @@ const t = /第\s*(\d+)\s*季[^\d]*(\d{4}-\d{2}-\d{2})?/.exec(lines[0] || '')
 const source = FORCE_SOURCE || (t ? `粉笔${t[1]}季` : '未标注')
 const day = (t && t[2]) || '1970-01-01'
 
+// 把「考点」归成「题型」：本子括号里多是考点（基期比重、两期比重差），
+// 直接当题型会让统计碎成一题一类。原值保留到 ability。
+function normType(module, raw) {
+  const s = String(raw || '')
+  if (module === '资料分析') {
+    if (/产销率/.test(s)) return '产销率'
+    if (/比重/.test(s)) return '比重'
+    if (/平均数/.test(s)) return '平均数'
+    if (/倍数/.test(s)) return '倍数'
+    if (/增长|增量|环比|同比/.test(s)) return '增长率'
+    if (/综合/.test(s)) return '综合分析'
+    return '其他计算'
+  }
+  if (module === '数量关系') {
+    if (/工程/.test(s)) return '工程问题'
+    if (/容斥|集合/.test(s)) return '容斥问题'
+    if (/和差倍比/.test(s)) return '和差倍比'
+    if (/构造|数列/.test(s)) return '数列构造'
+    if (/几何/.test(s)) return '几何'
+    return '其他'
+  }
+  if (module === '判断推理') {
+    if (/图形/.test(s)) return '图形推理'
+    if (/定义/.test(s)) return '定义判断'
+    if (/类比/.test(s)) return '类比推理'
+    if (/逻辑/.test(s)) return '逻辑判断'
+    if (/分析/.test(s)) return '分析推理'
+    return s || '其他'
+  }
+  if (module === '政治理论') return '政治理论'
+  if (module === '言语理解') {
+    if (/填空/.test(s)) return '逻辑填空'
+    if (/主旨|标题|横线/.test(s)) return '片段阅读'
+    return s || '言语'
+  }
+  return s || '(未填)'
+}
+
 const items = []
 let module = ''
 
@@ -39,7 +77,7 @@ function push(o) {
     day: o.day || day,
     source: o.source || source,
     module: o.module || module,
-    type: o.type || '',
+    type: normType(o.module || module, o.type),
     no: o.no || '',
     score: o.score === undefined ? null : o.score,
     full: 1,
