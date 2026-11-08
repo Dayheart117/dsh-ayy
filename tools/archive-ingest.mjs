@@ -160,12 +160,15 @@ db.exec(`
     t_from INTEGER, t_to INTEGER,
     scope TEXT, speakers TEXT,
     roles TEXT, text TEXT, chars INTEGER,
-    truncated INTEGER DEFAULT 0, ingested_at TEXT
+    truncated INTEGER DEFAULT 0, meta INTEGER DEFAULT 0, ingested_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_day ON chunks(day);
   CREATE INDEX IF NOT EXISTS idx_session ON chunks(session);
   CREATE INDEX IF NOT EXISTS idx_scope ON chunks(scope);
 `)
+// 老库补 meta 列
+try { db.exec('ALTER TABLE chunks ADD COLUMN meta INTEGER DEFAULT 0') } catch { /* 已有 */ }
+
 // FTS5 全文索引
 try {
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(id UNINDEXED, text, tokenize='trigram')`)
@@ -213,12 +216,15 @@ for (const f of files) {
     const tFrom = Math.min(...group.map((m) => m.time || 0)) || 0
     const tTo = Math.max(...group.map((m) => m.time || 0)) || 0
     const speakers = [...new Set(group.filter((m) => m.role === 'user').slice(0, 1).map(() => bind.name || ''))]
+    // 元对话标记：不在她的会话里、且满是技术词的片段（讨论系统本身），检索时降权/排除
+    const TECH = /(ayy_[a-z]+|dsh-[a-z]+|插件|索引|入库|检索|向量|工具表|白名单)/
+    const meta = !BIND.has(f.session) && TECH.test(text) ? 1 : 0
     db.prepare(`INSERT OR REPLACE INTO chunks
-      (id, session, workspace, day, t_from, t_to, scope, speakers, roles, text, chars, truncated, ingested_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      (id, session, workspace, day, t_from, t_to, scope, speakers, roles, text, chars, truncated, meta, ingested_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, f.session, f.workspace, dayOf(tFrom), tFrom, tTo, bind.type,
       speakers.join(','), [...new Set(group.map((m) => m.role))].join(','), text, text.length,
-      group.some((m) => m.truncated) ? 1 : 0, new Date().toISOString(),
+      group.some((m) => m.truncated) ? 1 : 0, meta, new Date().toISOString(),
     )
     db.prepare('DELETE FROM chunks_fts WHERE id = ?').run(id)
     db.prepare('INSERT INTO chunks_fts (id, text) VALUES (?,?)').run(id, text)

@@ -42,6 +42,16 @@ function herSessions() {
   }
 }
 
+/** 她的私聊会话（默认检索范围：不含群、不含开发对话） */
+function herPrivateSessions() {
+  try {
+    const b = JSON.parse(readFileSync(join(HOME, 'qq-bridge-config.json'), 'utf8').replace(/^\uFEFF/, ''))
+    return (b['绑定'] || []).filter((x) => x['类型'] !== '群').map((x) => String(x['会话'] || '')).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
 let db = null
 function open() {
   if (db) return db
@@ -52,54 +62,88 @@ function open() {
 
 const len = (s) => [...String(s)].length
 
-/** 混合检索 */
+/** 把查询拆成候选词：有空格按空格；中文没空格，用 2-gram/3-gram 滑窗 + 原串 */
+function terms(q) {
+  const s = String(q || '').trim()
+  if (!s) return []
+  if (/\s/.test(s)) return s.split(/\s+/).filter(Boolean)
+  const chars = [...s]
+  if (chars.length <= 3) return [s]
+  const out = new Set([s])
+  for (let i = 0; i + 2 <= chars.length; i++) out.add(chars.slice(i, i + 2).join(''))
+  for (let i = 0; i + 3 <= chars.length; i++) out.add(chars.slice(i, i + 3).join(''))
+  return [...out]
+}
+
+/** 单个词检索：>=3 字走 FTS，否则 LIKE */
+function searchOnce(d, term, o, limit) {
+  const extra = []
+  const args = []
+  if (o.dayFrom) { extra.push('c.day >= ?'); args.push(o.dayFrom) }
+  if (o.dayTo) { extra.push('c.day <= ?'); args.push(o.dayTo) }
+  if (o.session) { extra.push('c.session = ?'); args.push(o.session) }
+  if (o.scopeShow) { extra.push('c.scope = ?'); args.push(o.scopeShow) }
+  if (o.sessions && o.sessions.length) {
+    extra.push('c.session IN (' + o.sessions.map(() => '?').join(',') + ')')
+    args.push(...o.sessions)
+  }
+  if (!o.includeMeta) extra.push('c.meta = 0')
+  const whereExtra = extra.length ? ' AND ' + extra.join(' AND ') : ''
+  if ([...term].length >= 3) {
+    try {
+      const rows = d
+        .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, snippet(chunks_fts, 1, "\u3010", "\u3011", "\u2026", 30) AS s FROM chunks_fts f JOIN chunks c ON c.id = f.id WHERE f.text MATCH ?' + whereExtra + ' ORDER BY rank LIMIT ?')
+        .all(term, ...args, limit)
+      if (rows.length) return rows.map((r) => Object.assign({}, r, { how: 'FTS' }))
+    } catch (e) { /* 落到 LIKE */ }
+  }
+  return d
+    .prepare('SELECT c.id, c.day, c.session, c.scope, c.chars, c.meta, substr(c.text, max(1, instr(c.text, ?) - 30), 140) AS s FROM chunks c WHERE c.text LIKE ?' + whereExtra + ' ORDER BY c.t_from DESC LIMIT ?')
+    .all(term, '%' + term + '%', ...args, limit)
+    .map((r) => Object.assign({}, r, { how: 'LIKE' }))
+}
+
+/** 混合检索：多词拆开分别找，按命中词数 + 时间合并排序 */
 function search(q, opts) {
   const d = open()
   if (!d) return []
   const limit = Math.max(1, Math.min(Number(opts?.limit) || 5, 20))
-  const dayFrom = opts?.since ? String(opts.since) : ''
-  const dayTo = opts?.until ? String(opts.until) : ''
-  const scope = opts?.scope ? String(opts.scope) : '' // private | group | all
-  const session = opts?.session ? String(opts.session) : ''
-  const extra = []
-  const args = []
-  if (dayFrom) { extra.push('c.day >= ?'); args.push(dayFrom) }
-  if (dayTo) { extra.push('c.day <= ?'); args.push(dayTo) }
-  if (scope === 'her' || (!scope)) {
-    // 默认：只看她和白昼的会话（不含你跟我的开发对话）
-    const hers = herSessions()
-    if (hers.length) { extra.push(`c.session IN (${hers.map(() => '?').join(',')})`); args.push(...hers) }
-  } else if (scope === 'group' || scope === 'private') {
-    extra.push('c.scope = ?'); args.push(scope)
+  const scope = String(opts?.scope || 'her')
+  const hers = herSessions()
+  const herPrivate = herPrivateSessions()
+  const o = {
+    dayFrom: opts?.since ? String(opts.since) : '',
+    dayTo: opts?.until ? String(opts.until) : '',
+    session: opts?.session ? String(opts.session) : '',
+    includeMeta: scope === 'all',
+    sessions: null,
+    scopeShow: '',
   }
-  if (session) { extra.push('c.session = ?'); args.push(session) }
-  const whereExtra = extra.length ? ' AND ' + extra.join(' AND ') : ''
-
-  if (len(q) >= 3) {
-    try {
-      const rows = d
-        .prepare(`SELECT c.id, c.day, c.session, c.scope, c.chars,
-                         snippet(chunks_fts, 1, '【', '】', '…', 30) AS s
-                  FROM chunks_fts f JOIN chunks c ON c.id = f.id
-                  WHERE f.text MATCH ? ${whereExtra}
-                  ORDER BY rank LIMIT ?`)
-        .all(q, ...args, limit)
-      if (rows.length) return rows.map((r) => ({ ...r, how: 'FTS' }))
-    } catch {
-      /* 落到 LIKE */
+  if (scope === 'her') {
+    // 默认：只她和白昼的私聊（群聊和开发对话都排除）
+    o.sessions = herPrivate
+  } else if (scope === 'herok' || scope === 'her_all') {
+    o.sessions = hers // 她的全部（含群）
+  } else if (scope === 'group' || scope === 'private') {
+    o.scopeShow = scope
+  }
+  const ts = terms(q)
+  const agg = new Map()
+  for (const t of ts) {
+    for (const r of searchOnce(d, t, o, limit * 2)) {
+      const cur = agg.get(r.id) || { ...r, hits: 0, terms: [] }
+      cur.hits++
+      cur.terms.push(t)
+      agg.set(r.id, cur)
     }
   }
-  const rows = d
-    .prepare(`SELECT c.id, c.day, c.session, c.scope, c.chars,
-                     substr(c.text, max(1, instr(c.text, ?) - 30), 140) AS s
-              FROM chunks c
-              WHERE c.text LIKE ? ${whereExtra}
-              ORDER BY c.t_from DESC LIMIT ?`)
-    .all(q, `%${q}%`, ...args, limit)
-  return rows.map((r) => ({ ...r, how: 'LIKE' }))
+  const rows = [...agg.values()].sort((a, b) => b.hits - a.hits || (b.day || '').localeCompare(a.day || ''))
+  return rows.slice(0, limit)
 }
 
-const fmt = (r) => `${r.day} · ${r.scope === 'group' ? '群' : '私聊'} · ${r.chars}字\n     ${String(r.s || '').replace(/\s+/g, ' ').slice(0, 120)}`
+
+const fmt = (r) => r.day + " · " + (r.scope === "group" ? "群" : "私聊") + " · " + r.chars + "字"
+
 
 const out = () => ({
   schema: { type: 'object', properties: {}, additionalProperties: true },
@@ -125,7 +169,7 @@ export function apply(ctx) {
         since: { type: 'string', description: '起始日期 YYYY-MM-DD' },
         until: { type: 'string', description: '结束日期 YYYY-MM-DD' },
         session: { type: 'string', description: '限定某个会话 id' },
-        scope: { type: 'string', enum: ['her', 'private', 'group', 'all'], description: '默认 her=她和白昼的会话；all=含开发对话' },
+        scope: { type: 'string', enum: ['her', 'her_all', 'private', 'group', 'all'], description: '默认 her=只她的私聊；her_all=含群；all=连开发对话' },
         limit: { type: 'integer', description: '返回条数，默认 5' },
       },
       required: ['action'],
