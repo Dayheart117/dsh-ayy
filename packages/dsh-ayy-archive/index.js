@@ -137,7 +137,11 @@ function search(q, opts) {
       agg.set(r.id, cur)
     }
   }
-  const rows = [...agg.values()].sort((a, b) => b.hits - a.hits || (b.day || '').localeCompare(a.day || ''))
+// 排序：命中词数多的优先；同分时"命中的词更长"更具体（阿水<分开五年）；再按时间新
+  const weight = (r) => (r.terms || []).reduce((s, t) => s + t.length * t.length, 0)
+  const rows = [...agg.values()].sort(
+    (a, b) => b.hits - a.hits || weight(b) - weight(a) || (b.day || '').localeCompare(a.day || ''),
+  )
   return rows.slice(0, limit)
 }
 
