@@ -517,7 +517,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template', 'get'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
@@ -619,13 +619,31 @@ export function apply(ctx) {
         return { ok: true, item: row }
       }
 
+
       if (action === 'remove') {
-        const id = Number(args?.id)
-        if (!id) throw new Error('remove 需要 id')
         const d = open()
-        const info = d.prepare('DELETE FROM questions WHERE id = ?').run(id)
-        log(`remove #${id} affected=${info.changes}`)
-        return { ok: true, removed: Number(info.changes), id }
+        const id = Number(args?.id)
+        // 1) 单条：by id
+        if (id) {
+          const info = d.prepare('DELETE FROM questions WHERE id = ?').run(id)
+          try { d.prepare('DELETE FROM vecs WHERE row_id = ?').run(id) } catch { /* 没向量表 */ }
+          log(`remove #${id} affected=${info.changes}`)
+          return { ok: true, removed: Number(info.changes), id }
+        }
+        // 2) 整批：按「卷子(+题号)」或「日期」——必须给准确条件，防手滑
+        const w = []
+        const a = []
+        if (args?.source) { w.push('source = ?'); a.push(String(args.source)) }
+        if (args?.no) { w.push('no = ?'); a.push(String(args.no)) }
+        if (args?.day) { w.push('day = ?'); a.push(String(args.day)) }
+        if (!w.length) throw new Error('remove 需要 id，或者 source / source+no / day')
+        const rows = d.prepare('SELECT id FROM questions WHERE ' + w.join(' AND ')).all(...a)
+        for (const r of rows) {
+          d.prepare('DELETE FROM questions WHERE id = ?').run(r.id)
+          try { d.prepare('DELETE FROM vecs WHERE row_id = ?').run(r.id) } catch { /* 没向量表 */ }
+        }
+        log(`remove by ${w.join(' AND ')} → ${rows.length} 条`)
+        return { ok: true, removed: rows.length, 条件: w.join(' AND ') }
       }
 
       if (action === 'search') {
@@ -687,6 +705,28 @@ export function apply(ctx) {
         }
         log(`report #${pid} ${p2.source || ''} nodes=${nodes.length}`)
         return { ok: true, paper_id: pid, 节点数: nodes.length }
+      }
+
+      if (action === 'get') {
+        // 取单条完整记录（body 可能有几千字，list 里看不到）
+        const d = open()
+        const id = Number(args?.id)
+        let row = null
+        if (id) row = d.prepare('SELECT * FROM questions WHERE id = ?').get(id)
+        else if (args?.source && args?.no) row = d.prepare('SELECT * FROM questions WHERE source = ? AND no = ?').get(String(args.source), String(args.no))
+        if (!row) throw new Error('没找到：给 id，或者给 source + no')
+        let tags = []
+        try { tags = JSON.parse(row.tags || '[]') } catch { tags = [] }
+        return {
+          id: row.id,
+          卷子: row.source, 题号: row.no, 日期: row.day, 层级: row.path, 标签: tags,
+          题型: row.type || '', 考点: row.ability || '',
+          题干: row.stem, 完整题面: row.body || row.stem,
+          当时做答: row.picked || '', 正确答案: row.answer || '',
+          当时思路: row.digest || '', 标准解析: row.analysis || '',
+          得分: row.score, 满分: row.full, 错因: row.wrong || '',
+          本子: row.doc || '', 锚点: row.anchor || '',
+        }
       }
 
       if (action === 'template') {
