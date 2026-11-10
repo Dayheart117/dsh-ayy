@@ -82,7 +82,7 @@ function open() {
   // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
   // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
   const have2 = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
-  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"]]) {
+  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"], ['body', "TEXT DEFAULT ''"], ['answer', "TEXT DEFAULT ''"]]) {
     if (!have2.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
   // 回填：老数据没有 path 的，用 科目/模块/题型/考点 拼一份
@@ -150,13 +150,31 @@ function checkType(subject, module, type) {
   return { known: list.includes(type), siblings: list }
 }
 
+/** 按「来源+题号」覆盖已有记录（upsert），避免同一道题重复入库 */
+function upsertOne(item) {
+  const d = open()
+  const ex = d.prepare('SELECT id FROM questions WHERE source = ? AND no = ?').get(String(item.source || ''), String(item.no || ''))
+  if (!ex) return null
+  const patch = {}
+  for (const k of FIELDS) {
+    if (item[k] === undefined) continue
+    patch[k] = k === 'tags' ? (Array.isArray(item.tags) ? JSON.stringify(item.tags) : String(item.tags || '[]')) : item[k]
+  }
+  if (item.body === undefined && item.stem !== undefined) patch.body = String(item.stem)
+  const keys = Object.keys(patch)
+  if (keys.length) {
+    d.prepare(`UPDATE questions SET ${keys.map((k) => k + ' = ?').join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k]), ex.id)
+  }
+  return ex.id
+}
+
 const today = () => {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer']
 
 function insertOne(item) {
   const d = open()
@@ -186,7 +204,10 @@ function insertOne(item) {
         ? String(item.doc).split('#').slice(1).join('#')
         : '',
     // digest：三百字以内摘要，直接可读，不用翻本子（存储不贵，读才贵）
-    digest: item?.digest != null ? String(item.digest).slice(0, 300) : item?.note != null ? String(item.note).slice(0, 300) : '',
+    digest: item?.digest != null ? String(item.digest).slice(0, 800) : item?.note != null ? String(item.note).slice(0, 800) : '',
+    // body：题干全文 + ABCD 选项（论文字数也无所谓，SQLite 不怕长；贵的是读，所以另存 digest）
+    body: item?.body != null ? String(item.body).slice(0, 4000) : item?.stem != null ? String(item.stem) : '',
+    answer: item?.answer != null ? String(item.answer).slice(0, 20) : '',
     // path：给了就用；没给就用 科目/模块/题型/考点 拼（层级任意深）
     path:
       item?.path != null && String(item.path).trim()
@@ -453,6 +474,7 @@ export function apply(ctx) {
         limit: { type: 'integer', description: 'list/search 返回条数，默认 list 20 / search 8' },
         query: { type: 'string', description: 'search：想找什么（可以是一句大白话）' },
         depth: { type: 'integer', description: 'stats groupBy=path 时统计到第几层，默认 3' },
+        upsert: { type: 'boolean', description: 'add：按 来源+题号 覆盖已有记录（重录同一套卷子不会重复）' },
         from: { type: 'string', enum: ['both', 'questions', 'papers'], description: 'stats 数据来源：both=题目+整卷节点（默认），questions=只逐题，papers=只整卷' },
         tag: { type: 'string', description: '按标签过滤，如 材料:统计表' },
         path: { type: 'string', description: 'add/list：完整层级路径，如 行测/判断推理/图形推理/数量规律/线' },
@@ -468,7 +490,15 @@ export function apply(ctx) {
         const items = Array.isArray(args?.items) ? args.items : args?.item ? [args.item] : []
         if (!items.length) throw new Error('add 需要 item 或 items')
         const ids = []
-        for (const it of items) ids.push(insertOne(it).id)
+        let ups = 0
+        for (const it of items) {
+          // upsert：同一套卷子 + 同一个题号 → 覆盖，不重复入库
+          if (args?.upsert && it.source && it.no) {
+            const id = upsertOne(it)
+            if (id) { ids.push(id); ups++; continue }
+          }
+          ids.push(insertOne(it).id)
+        }
         const total = open().prepare('SELECT COUNT(*) AS n FROM questions').get().n
         log(`add ${ids.length} 条 → 库里共 ${total}`)
         // 尽力算向量：Ollama 没开就跳过，下次 search/reindex 会补
@@ -484,7 +514,7 @@ export function apply(ctx) {
           if (!checkType(sub, mod, t).known) unknown.set(`${sub}/${mod}/${t}`, true)
         }
         return {
-          ok: true, added: ids.length, ids, total, 已建向量: embedded,
+          ok: true, added: ids.length, 覆盖: ups || 0, ids, total, 已建向量: embedded,
           ...(unknown.size ? { 新题型: [...unknown.keys()], 提示: '这些题型不在 taxonomy.json 里；用得多了可以加进去，或者就这么放着也行' } : {}),
         }
       }
