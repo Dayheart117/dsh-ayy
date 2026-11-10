@@ -82,7 +82,7 @@ function open() {
   // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
   // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
   const have2 = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
-  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"], ['body', "TEXT DEFAULT ''"], ['answer', "TEXT DEFAULT ''"]]) {
+  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"], ['body', "TEXT DEFAULT ''"], ['answer', "TEXT DEFAULT ''"], ['picked', "TEXT DEFAULT ''"], ['analysis', "TEXT DEFAULT ''"]]) {
     if (!have2.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
   // 回填：老数据没有 path 的，用 科目/模块/题型/考点 拼一份
@@ -174,7 +174,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer', 'picked', 'analysis']
 
 function insertOne(item) {
   const d = open()
@@ -208,6 +208,9 @@ function insertOne(item) {
     // body：题干全文 + ABCD 选项（论文字数也无所谓，SQLite 不怕长；贵的是读，所以另存 digest）
     body: item?.body != null ? String(item.body).slice(0, 4000) : item?.stem != null ? String(item.stem) : '',
     answer: item?.answer != null ? String(item.answer).slice(0, 20) : '',
+    // picked=当时做答（我选了什么）；analysis=标准解析（思路放 digest，别混）
+    picked: item?.picked != null ? String(item.picked).slice(0, 20) : '',
+    analysis: item?.analysis != null ? String(item.analysis).slice(0, 3000) : '',
     // path：给了就用；没给就用 科目/模块/题型/考点 拼（层级任意深）
     path:
       item?.path != null && String(item.path).trim()
