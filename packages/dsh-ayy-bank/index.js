@@ -150,6 +150,63 @@ function checkType(subject, module, type) {
   return { known: list.includes(type), siblings: list }
 }
 
+/** 字段别名：她说"思路""做答"也能落，不用记英文名 */
+const ALIAS = {
+  题干: 'stem', 题目: 'stem', 摘要: 'stem', 关键词: 'stem',
+  题面: 'body', 全文: 'body', 选项: 'body', 完整题干: 'body',
+  思路: 'digest', 做法: 'digest', 解题思路: 'digest', 我的思路: 'digest',
+  解析: 'analysis', 标准解析: 'analysis',
+  做答: 'picked', 当时做答: 'picked', 我选的: 'picked', 选: 'picked',
+  答案: 'answer', 正确答案: 'answer',
+  来源: 'source', 卷子: 'source', 出处: 'source',
+  题号: 'no', 路径: 'path', 层级: 'path',
+  错因: 'wrong', 得分: 'score', 满分: 'full', 用时: 'seconds',
+  本子: 'doc', 锚点: 'anchor', 日期: 'day', 科目: 'subject',
+}
+
+/** 录题模板：工具给出、调用方照着填，不靠临场发挥 */
+function bankTemplate() {
+  return {
+    item: {
+      day: 'YYYY-MM-DD',
+      source: '卷子全名（哪年、哪类卷）',
+      no: '题号',
+      subject: '行测',
+      path: '行测/模块/题型/考点',
+      tags: ['材料:统计表'],
+      stem: '一行认出是哪道题',
+      body: '完整题干 + A. … B. … C. … D. …',
+      picked: '当时选了什么（字母）',
+      answer: '正确答案（字母）',
+      digest: '当时思路——怎么想的、卡在哪（不是解析）',
+      analysis: '标准解析（太长就写本子，这里留空）',
+      doc: '讲评本.md#第N题',
+      anchor: '第N题',
+      score: 0,
+      full: 1,
+      wrong: '知识盲区/方法/审题/速度/粗心/表述',
+    },
+    必填: ['source', 'no', 'stem 或 body'],
+    字段别名: '思路→digest、做答→picked、解析→analysis、题干→stem、题面→body、卷子→source',
+  }
+}
+
+/** 必填：来源 + 题号 + 题面（stem 或 body）。缺了直接拒，不靠她自觉 */
+function normalizeItem(it) {
+  const out = {}
+  const unknown = []
+  for (const [k, v] of Object.entries(it || {})) {
+    const key = ALIAS[k] || k
+    if (!FIELDS.includes(key) && key !== 'upsert') { unknown.push(k); continue }
+    out[key] = v
+  }
+  const missing = []
+  if (!out.source) missing.push('source（卷子/来源）')
+  if (!out.no) missing.push('no（题号）')
+  if (!out.stem && !out.body) missing.push('stem 或 body（题面）')
+  return { item: out, missing, unknown }
+}
+
 /** 按「来源+题号」覆盖已有记录（upsert），避免同一道题重复入库 */
 function upsertOne(item) {
   const d = open()
@@ -460,7 +517,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
@@ -494,7 +551,20 @@ export function apply(ctx) {
         if (!items.length) throw new Error('add 需要 item 或 items')
         const ids = []
         let ups = 0
-        for (const it of items) {
+        // 先校验：缺必填 / 写了不存在的字段 → 直接报错并给模板（不靠调用方的上下文猜）
+        const normd = []
+        const problems = []
+        for (const raw of items) {
+          const r = normalizeItem(raw)
+          if (r.missing.length) problems.push({ 缺: r.missing })
+          if (r.unknown.length) problems.push({ 不认识的字段: r.unknown, 提示: '字段名见 ayy_bank(action:"template")' })
+          normd.push(r.item)
+        }
+        if (problems.length) {
+          throw new Error('录题字段不全：' + JSON.stringify(problems) + '\n照这个填：' + JSON.stringify(bankTemplate().item))
+        }
+        const noDigest = normd.filter((x) => !x.digest).length
+        for (const it of normd) {
           // upsert：同一套卷子 + 同一个题号 → 覆盖，不重复入库
           if (args?.upsert && it.source && it.no) {
             const id = upsertOne(it)
@@ -518,6 +588,7 @@ export function apply(ctx) {
         }
         return {
           ok: true, added: ids.length, 覆盖: ups || 0, ids, total, 已建向量: embedded,
+          ...(noDigest ? { 提示: String(noDigest) + " 条没写 digest（当时思路）——以后复盘会缺东西" } : {}),
           ...(unknown.size ? { 新题型: [...unknown.keys()], 提示: '这些题型不在 taxonomy.json 里；用得多了可以加进去，或者就这么放着也行' } : {}),
         }
       }
@@ -616,6 +687,10 @@ export function apply(ctx) {
         }
         log(`report #${pid} ${p2.source || ''} nodes=${nodes.length}`)
         return { ok: true, paper_id: pid, 节点数: nodes.length }
+      }
+
+      if (action === 'template') {
+        return bankTemplate()
       }
 
       if (action === 'verify') {
