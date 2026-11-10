@@ -219,6 +219,7 @@ function bankTemplate() {
       score: 0,
       full: 1,
       wrong: '知识盲区/方法/审题/速度/粗心/表述',
+      material: { no_from: '起题号', no_to: '止题号', title: '材料标题', body: '材料全文（一段材料挂多题时用）' },
     },
     必填: ['source', 'no', 'stem 或 body'],
     字段别名: '思路→digest、做答→picked、解析→analysis、题干→stem、题面→body、卷子→source',
@@ -548,7 +549,10 @@ export function apply(ctx) {
       '  ＋ key（采分点清单，短句）· doc（完整解析在哪个本子，如 申论/概括措施-2026.md#3）· note（失分点标签，如"漏第3点"）\n' +
       '· stats：按 type/wrong/source/module/ability 分组算次数、错题数、错误率、平均得分率（可加 month=2026-11）\n' +
       '· list：按 type/wrong/source/module/month 筛 · update/remove：按 id · export：导 CSV 到 ayy-bank/exports/\n' +
-      '**分工**：库里只存可统计的字段 + 解析在哪；完整题干和解析写 ayy_note 的本子（题多了按题型/年份分文件）。',
+'· get：读一条完整记录（给 id 或 卷子+题号），会带出共用材料\n' +
+      '· material：列材料 / 看某材料挂了哪些题\n' +
+      '**大题**（一段材料对应多题）：每题传同一个 material{no_from,no_to,title,body}，工具按「卷子+起止题号」只存一份；只给一道题用的材料直接写进 body。\n' +
+      '**分工**：库里存可统计字段 + digest（当时思路）；analysis 和详细解析写本子，用 doc#anchor 指过去。',
     parameters: {
       type: 'object',
       properties: {
