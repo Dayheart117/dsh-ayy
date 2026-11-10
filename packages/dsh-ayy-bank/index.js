@@ -50,6 +50,18 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_module ON questions(module);
     CREATE INDEX IF NOT EXISTS idx_wrong ON questions(wrong);
   `)
+  // 材料表：一段材料对应多道题（资料分析 111-115、申论一段材料对应多问）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS materials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT, day TEXT, title TEXT, body TEXT,
+      no_from TEXT, no_to TEXT, tags TEXT, created TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mat_key ON materials(source, no_from, no_to);
+  `)
+  const hasMat = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
+  if (!hasMat.has('material_id')) db.exec("ALTER TABLE questions ADD COLUMN material_id INTEGER DEFAULT NULL")
+
   // 整卷成绩：一个卷子 + 每个节点的题数/答对/用时（对应粉笔成绩单那种层级）
   db.exec(`
     CREATE TABLE IF NOT EXISTS papers (
@@ -164,6 +176,28 @@ const ALIAS = {
   本子: 'doc', 锚点: 'anchor', 日期: 'day', 科目: 'subject',
 }
 
+/** 材料：同一段材料多用题共用，按「来源+起始题号+结束题号」唯一 */
+function upsertMaterial(m, fallback) {
+  if (!m || typeof m !== 'object') return null
+  const d = open()
+  const source = String(m.source || fallback?.source || '')
+  const from = String(m.no_from || m.from || fallback?.no || '')
+  const to = String(m.no_to || m.to || fallback?.no || '')
+  if (!source || !from) return null
+  const ex = d.prepare('SELECT id FROM materials WHERE source = ? AND no_from = ? AND no_to = ?').get(source, from, to)
+  const body = String(m.body || m.text || '').slice(0, 20000)
+  const title = String(m.title || `${from}-${to} 材料`).slice(0, 120)
+  const tags = Array.isArray(m.tags) ? JSON.stringify(m.tags) : '[]'
+  if (ex) {
+    d.prepare('UPDATE materials SET body = ?, title = ?, tags = ? WHERE id = ?').run(body, title, tags, ex.id)
+    return ex.id
+  }
+  const info = d.prepare('INSERT INTO materials (source, day, title, body, no_from, no_to, tags, created) VALUES (?,?,?,?,?,?,?,?)').run(
+    source, String(m.day || fallback?.day || today()), title, body, from, to, tags, new Date().toISOString(),
+  )
+  return Number(info.lastInsertRowid)
+}
+
 /** 录题模板：工具给出、调用方照着填，不靠临场发挥 */
 function bankTemplate() {
   return {
@@ -197,7 +231,7 @@ function normalizeItem(it) {
   const unknown = []
   for (const [k, v] of Object.entries(it || {})) {
     const key = ALIAS[k] || k
-    if (!FIELDS.includes(key) && key !== 'upsert') { unknown.push(k); continue }
+    if (!FIELDS.includes(key) && key !== 'upsert' && key !== 'material') { unknown.push(k); continue }
     out[key] = v
   }
   const missing = []
@@ -231,7 +265,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer', 'picked', 'analysis']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer', 'picked', 'analysis', 'material_id']
 
 function insertOne(item) {
   const d = open()
@@ -268,6 +302,7 @@ function insertOne(item) {
     // picked=当时做答（我选了什么）；analysis=标准解析（思路放 digest，别混）
     picked: item?.picked != null ? String(item.picked).slice(0, 20) : '',
     analysis: item?.analysis != null ? String(item.analysis).slice(0, 3000) : '',
+    material_id: item?.material_id != null ? Number(item.material_id) : null,
     // path：给了就用；没给就用 科目/模块/题型/考点 拼（层级任意深）
     path:
       item?.path != null && String(item.path).trim()
@@ -517,7 +552,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template', 'get'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template', 'get', 'material'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
@@ -565,6 +600,11 @@ export function apply(ctx) {
         }
         const noDigest = normd.filter((x) => !x.digest).length
         for (const it of normd) {
+          // 大题材料：给了 material 就先入材料表，题目只存引用
+          if (it.material || it.material_id) {
+            const mid = it.material ? upsertMaterial(it.material, it) : Number(it.material_id)
+            if (mid) it.material_id = mid
+          }
           // upsert：同一套卷子 + 同一个题号 → 覆盖，不重复入库
           if (args?.upsert && it.source && it.no) {
             const id = upsertOne(it)
@@ -717,7 +757,13 @@ export function apply(ctx) {
         if (!row) throw new Error('没找到：给 id，或者给 source + no')
         let tags = []
         try { tags = JSON.parse(row.tags || '[]') } catch { tags = [] }
+        let mat = null
+        if (row.material_id) {
+          const m = d.prepare('SELECT * FROM materials WHERE id = ?').get(row.material_id)
+          if (m) mat = { id: m.id, 标题: m.title, 范围: m.no_from + '-' + m.no_to, 材料: m.body }
+        }
         return {
+          材料: mat,
           id: row.id,
           卷子: row.source, 题号: row.no, 日期: row.day, 层级: row.path, 标签: tags,
           题型: row.type || '', 考点: row.ability || '',
@@ -727,6 +773,19 @@ export function apply(ctx) {
           得分: row.score, 满分: row.full, 错因: row.wrong || '',
           本子: row.doc || '', 锚点: row.anchor || '',
         }
+      }
+
+      if (action === 'material') {
+        const d = open()
+        const id = Number(args?.id)
+        if (id) {
+          const m = d.prepare('SELECT * FROM materials WHERE id = ?').get(id)
+          if (!m) throw new Error('没这条材料')
+          const qs = d.prepare('SELECT id, no, stem FROM questions WHERE material_id = ? ORDER BY id').all(id)
+          return { id: m.id, 卷子: m.source, 范围: m.no_from + '-' + m.no_to, 标题: m.title, 材料: m.body, 挂着的题: qs }
+        }
+        const list = d.prepare('SELECT m.*, (SELECT COUNT(*) FROM questions q WHERE q.material_id = m.id) n FROM materials m ORDER BY id DESC LIMIT 30').all()
+        return { count: list.length, 材料: list.map((m) => ({ id: m.id, 卷子: m.source, 范围: m.no_from + '-' + m.no_to, 挂了: m.n + ' 题', 标题: m.title })) }
       }
 
       if (action === 'template') {
