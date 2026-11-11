@@ -94,7 +94,7 @@ function open() {
   // 任意深度：path 存整条层级（"行测/判断推理/图形推理/数量规律/线"）
   // tags 存正交维度（如 "材料:统计表"），和层级分开，否则两轴会打架
   const have2 = new Set(db.prepare('PRAGMA table_info(questions)').all().map((r) => r.name))
-  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"], ['body', "TEXT DEFAULT ''"], ['answer', "TEXT DEFAULT ''"], ['picked', "TEXT DEFAULT ''"], ['analysis', "TEXT DEFAULT ''"]]) {
+  for (const [col, def] of [['path', "TEXT DEFAULT ''"], ['tags', "TEXT DEFAULT '[]'"], ['anchor', "TEXT DEFAULT ''"], ['digest', "TEXT DEFAULT ''"], ['body', "TEXT DEFAULT ''"], ['answer', "TEXT DEFAULT ''"], ['picked', "TEXT DEFAULT ''"], ['analysis', "TEXT DEFAULT ''"], ['review_at', "TEXT DEFAULT ''"], ['review_n', 'INTEGER DEFAULT 0'], ['last_review', "TEXT DEFAULT ''"]]) {
     if (!have2.has(col)) db.exec(`ALTER TABLE questions ADD COLUMN ${col} ${def}`)
   }
   // 回填：老数据没有 path 的，用 科目/模块/题型/考点 拼一份
@@ -198,6 +198,58 @@ function upsertMaterial(m, fallback) {
   return Number(info.lastInsertRowid)
 }
 
+
+/**
+ * 错因码表：错因必须落在这里，统计才分得开。
+ * 码=短的稳定标识；别名容错（她说"粗心算错"也归到「计算」）。
+ */
+const WRONG_CODES = [
+  { code: '盲区', name: '知识盲区', desc: '压根不会/没见过这个考点', alias: ['不会', '没学', '盲区', '知识', '知识点'] },
+  { code: '方法', name: '方法不熟', desc: '考点见过但套路没掌握', alias: ['方法', '套路', '技巧', '不会用'] },
+  { code: '审题', name: '审题偏差', desc: '看错问法/主体/范围/单位', alias: ['审题', '看错', '理解错', '问法'] },
+  { code: '计算', name: '计算失误', desc: '式子列对、算错', alias: ['计算', '算错', '粗心算', '算术'] },
+  { code: '粗心', name: '粗心', desc: '抄错选项/看漏一个条件', alias: ['粗心', '看漏', '抄错', '手滑'] },
+  { code: '速度', name: '速度超时', desc: '会做但花太久，考场该放弃', alias: ['速度', '超时', '太慢', '时间'] },
+  { code: '表达', name: '表述失分', desc: '申论/面试表达不到位', alias: ['表述', '表达', '语言', '不准确'] },
+  { code: '材料', name: '材料理解', desc: '没读懂材料/没抓住要点', alias: ['材料', '读不懂', '抓不准', '要点'] },
+  { code: '弃做', name: '弃做', desc: '没做/蒙的', alias: ['蒙', '放弃', '没做', '瞎选'] },
+  { code: '未标', name: '未标注', desc: '当时没写错因', alias: ['', '未标注', '不知道'] },
+]
+
+/** 错因归一：认名字、认码、认别名；认不出返回 null（由调用方决定拒还是记未标） */
+function canonWrong(v) {
+  const raw = String(v == null ? '' : v).trim()
+  if (!raw) return '未标注'
+  for (const c of WRONG_CODES) {
+    if (raw === c.code || raw === c.name) return c.name
+    for (const a of c.alias) if (a && raw === a) return c.name
+  }
+  // 包含匹配：如"粗心算错"→计算
+  for (const c of WRONG_CODES) {
+    if (c.code === '未标') continue
+    for (const a of c.alias) if (a && a.length >= 2 && raw.includes(a)) return c.name
+  }
+  return null
+}
+
+
+/** 本地日期 YYYY-MM-DD（toISOString 是 UTC，东八区会倒退一天） */
+function ymd(d) {
+  const x = d instanceof Date ? d : new Date(d)
+  const p2 = (n) => String(n).padStart(2, '0')
+  return x.getFullYear() + '-' + p2(x.getMonth() + 1) + '-' + p2(x.getDate())
+}
+/** 复习调度：错题按次数递推，间隔 1/2/4/7/15/30/60 天 */
+const REVIEW_STEPS = [1, 2, 4, 7, 15, 30, 60]
+function nextReview(day, n, ok) {
+  const base = String(day || ymd(new Date())).slice(0, 10)
+  const count = ok ? Math.max(0, Number(n) || 0) : 0 // 答对进下一档，答错回第 0 档
+  const step = REVIEW_STEPS[Math.min(count, REVIEW_STEPS.length - 1)]
+  const d = new Date(base + 'T12:00:00')
+  d.setDate(d.getDate() + step)
+  return { at: ymd(d), n: count + (ok ? 1 : 0) }
+}
+
 /** 录题模板：工具给出、调用方照着填，不靠临场发挥 */
 function bankTemplate() {
   return {
@@ -273,6 +325,13 @@ function upsertOne(item) {
     patch[k] = k === 'tags' ? (Array.isArray(item.tags) ? JSON.stringify(item.tags) : String(item.tags || '[]')) : item[k]
   }
   if (item.body === undefined && item.stem !== undefined) patch.body = String(item.stem)
+  // 覆盖时同样过码表：错因归一（认不出记未标注）
+  if (patch.wrong !== undefined) patch.wrong = canonWrong(patch.wrong) || '未标注'
+  // 覆盖时标了错（score<full）且没给复习日 → 重排到明天
+  if (patch.review_at === undefined && patch.score !== undefined && patch.full != null && Number(patch.score) < Number(patch.full)) {
+    patch.review_at = nextReview(patch.day || ymd(new Date()), 0, false).at
+    patch.review_n = 0
+  }
   const keys = Object.keys(patch)
   if (keys.length) {
     d.prepare(`UPDATE questions SET ${keys.map((k) => k + ' = ?').join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k]), ex.id)
@@ -286,7 +345,7 @@ const today = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer', 'picked', 'analysis', 'material_id']
+const FIELDS = ['subject', 'day', 'source', 'module', 'type', 'ability', 'points', 'score', 'full', 'wrong', 'seconds', 'no', 'note', 'stem', 'ask', 'key', 'doc', 'material', 'path', 'tags', 'anchor', 'digest', 'body', 'answer', 'picked', 'analysis', 'material_id', 'review_at', 'review_n', 'last_review']
 
 function insertOne(item) {
   const d = open()
@@ -320,6 +379,17 @@ function insertOne(item) {
     // body：题干全文 + ABCD 选项（论文字数也无所谓，SQLite 不怕长；贵的是读，所以另存 digest）
     body: item?.body != null ? String(item.body).slice(0, 4000) : item?.stem != null ? String(item.stem) : '',
     answer: item?.answer != null ? String(item.answer).slice(0, 20) : '',
+    // 错因归一：认不出的一律记「未标注」，不让脏值进统计
+    wrong: canonWrong(item?.wrong) || '未标注',
+    // 复习调度：错题从明天开始，答对的下次延后
+    review_at:
+      item?.review_at != null
+        ? String(item.review_at).slice(0, 10)
+        : item?.full != null && Number(item?.score) >= Number(item.full)
+          ? '' // 做对了不用排复习
+          : nextReview(item?.day || ymd(new Date()), 0, false).at, // 错了 → 明天
+    review_n: item?.review_n != null ? Number(item.review_n) : 0,
+    last_review: item?.last_review != null ? String(item.last_review).slice(0, 10) : '',
     // picked=当时做答（我选了什么）；analysis=标准解析（思路放 digest，别混）
     picked: item?.picked != null ? String(item.picked).slice(0, 20) : '',
     analysis: item?.analysis != null ? String(item.analysis).slice(0, 3000) : '',
@@ -577,7 +647,7 @@ export function apply(ctx) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template', 'get', 'material'], description: '默认 add' },
+        action: { type: 'string', enum: ['add', 'stats', 'list', 'update', 'remove', 'export', 'taxonomy', 'report', 'verify', 'template', 'get', 'material', 'codes', 'due', 'review'], description: '默认 add' },
         item: { type: 'object', additionalProperties: true, description: 'add：单条题目' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add：一批题目' },
         groupBy: { type: 'string', enum: ['subject', 'type', 'wrong', 'source', 'module', 'ability', 'material', 'path'], description: 'stats 分组维度，默认 type' },
@@ -594,6 +664,8 @@ export function apply(ctx) {
         limit: { type: 'integer', description: 'list/search 返回条数，默认 list 20 / search 8' },
         query: { type: 'string', description: 'search：想找什么（可以是一句大白话）' },
         depth: { type: 'integer', description: 'stats groupBy=path 时统计到第几层，默认 3' },
+        ok: { type: 'boolean', description: 'review：这次复习做对了吗（true 进下一档，false 回第一档）' },
+        days: { type: 'integer', description: 'due：往后看几天，默认 0=只看到今天' },
         upsert: { type: 'boolean', description: 'add：按 来源+题号 覆盖已有记录（重录同一套卷子不会重复）' },
         from: { type: 'string', enum: ['both', 'questions', 'papers'], description: 'stats 数据来源：both=题目+整卷节点（默认），questions=只逐题，papers=只整卷' },
         tag: { type: 'string', description: '按标签过滤，如 材料:统计表' },
@@ -810,6 +882,61 @@ export function apply(ctx) {
           当时思路: row.digest || '', 标准解析: row.analysis || '',
           得分: row.score, 满分: row.full, 错因: row.wrong || '',
           本子: row.doc || '', 锚点: row.anchor || '',
+        }
+      }
+
+      if (action === 'codes') {
+        return {
+          说明: '错因只能从这里选；写别名也认，认不出的记「未标注」',
+          码表: WRONG_CODES.map((c) => ({ 码: c.code, 名称: c.name, 说明: c.desc, 别名: c.alias.filter(Boolean) })),
+          复习间隔: REVIEW_STEPS.map((d) => d + '天').join(' → '),
+        }
+      }
+
+      if (action === 'due') {
+        const d = open()
+        const extra = Math.max(0, Number(args?.days) || 0)
+        const until = ymd(new Date(Date.now() + extra * 86400000))
+        const rows = d
+          .prepare("SELECT id, source, no, stem, digest, review_at, review_n, path FROM questions WHERE review_at <> '' AND review_at <= ? ORDER BY review_at ASC LIMIT ?")
+          .all(until, Math.max(1, Math.min(Number(args?.limit) || 20, 100)))
+        const today = ymd(new Date())
+        return {
+          今天: today,
+          到期的: rows.length,
+          清单: rows.map((r) => ({
+            id: r.id,
+            题: (r.source || '') + ' #' + (r.no || ''),
+            到期: r.review_at,
+            逾期: r.review_at < today ? '逾期 ' + Math.round((Date.parse(today) - Date.parse(r.review_at)) / 86400000) + ' 天' : '',
+            题干: String(r.stem || '').slice(0, 40),
+            思路: String(r.digest || '').slice(0, 40),
+            第几次: Number(r.review_n || 0) + 1,
+          })),
+          说明: '做完了用 ayy_bank(action:"review", id=…, ok=true/false) 记结果',
+        }
+      }
+
+      if (action === 'review') {
+        const d = open()
+        const id = Number(args?.id)
+        if (!id) throw new Error('review 需要 id（先 due 看清单）')
+        const row = d.prepare('SELECT id, review_n, day FROM questions WHERE id = ?').get(id)
+        if (!row) throw new Error('没这道题：' + id)
+        const ok = args?.ok !== false
+        const today = ymd(new Date())
+        const nx = nextReview(today, row.review_n || 0, ok)
+        const graduate = ok && Number(row.review_n || 0) + 1 >= REVIEW_STEPS.length
+        d.prepare('UPDATE questions SET review_at = ?, review_n = ?, last_review = ? WHERE id = ?').run(
+          graduate ? '' : nx.at, nx.n, today, id,
+        )
+        log(`review #${id} ok=${ok} → ${graduate ? '毕业' : nx.at}`)
+        return {
+          ok: true,
+          id,
+          结果: ok ? '做对了' : '做错了（回第一档）',
+          下次复习: graduate ? '不用再排（已毕业）' : nx.at,
+          第几次: nx.n,
         }
       }
 
