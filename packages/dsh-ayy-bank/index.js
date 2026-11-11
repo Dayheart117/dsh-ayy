@@ -226,6 +226,26 @@ function bankTemplate() {
   }
 }
 
+/**
+ * 来源格式校验：只写"湖北卷""省考"不行——明年同省的事业编会把它们混成一堆。
+ * 硬要求：年份 + 考试类型（公务员/事业单位等）。
+ * 软提示：科目（行测/申论…）、卷别（A卷/B卷/县级/乡镇级）。
+ */
+function checkSource(src) {
+  const s = String(src || '')
+  const errors = []
+  const warns = []
+  if (!/(19|20)\d{2}\s*年?/.test(s)) errors.push('缺年份（例：2026年）')
+  // 省考/国考/联考 本身就是公务员考试，算合格；但只写简称时提示写清楚
+  const explicit = /公务员|事业编|事业单位|选调生?|三支一扶|军队文职|教师招聘|国企/.test(s)
+  const abbrev = /省考|国考|联考|市考|区考|省属|省直/.test(s)
+  if (!explicit && !abbrev) errors.push('缺考试类型（公务员 / 事业单位 / 省考 / 国考 / 联考…）')
+  else if (!explicit && abbrev) warns.push('用了简称（省考/国考/联考）——同一省份如果还有事业编卷，建议写清"公务员"')
+  if (!/行测|申论|面试|职测|职业能力|公基|公共基础|综合知识|综合应用|专业科目/.test(s)) warns.push('没写科目（行测/申论/面试…）')
+  if (!/(A卷|B卷|C卷|县级|乡镇|省级|市级|省级机关|网友回忆版|联考)/.test(s)) warns.push('没写卷别（A卷/B卷/县级/乡镇级/网友回忆版）')
+  return { ok: errors.length === 0, errors, warns }
+}
+
 /** 必填：来源 + 题号 + 题面（stem 或 body）。缺了直接拒，不靠她自觉 */
 function normalizeItem(it) {
   const out = {}
@@ -552,6 +572,7 @@ export function apply(ctx) {
 '· get：读一条完整记录（给 id 或 卷子+题号），会带出共用材料\n' +
       '· material：列材料 / 看某材料挂了哪些题\n' +
       '**大题**（一段材料对应多题）：每题传同一个 material{no_from,no_to,title,body}，工具按「卷子+起止题号」只存一份；只给一道题用的材料直接写进 body。\n' +
+      '**来源格式**：必须含年份 + 考试类型，例「2026年湖北省公务员考试行测（网友回忆版）」；只写「湖北卷」「省考」会被拒。\n' +
       '**分工**：库里存可统计字段 + digest（当时思路）；analysis 和详细解析写本子，用 doc#anchor 指过去。',
     parameters: {
       type: 'object',
@@ -593,14 +614,22 @@ export function apply(ctx) {
         // 先校验：缺必填 / 写了不存在的字段 → 直接报错并给模板（不靠调用方的上下文猜）
         const normd = []
         const problems = []
+        const sourceWarns = []
         for (const raw of items) {
           const r = normalizeItem(raw)
           if (r.missing.length) problems.push({ 缺: r.missing })
+          if (!r.missing.includes('source（卷子/来源）')) {
+            const cs = checkSource(r.item.source)
+            if (!cs.ok) problems.push({ 来源不合格: r.item.source, 缺: cs.errors, 例: '2026年湖北省公务员考试行测（网友回忆版）' })
+            else if (cs.warns.length) sourceWarns.push({ 来源: r.item.source, 建议补: cs.warns })
+          }
           if (r.unknown.length) problems.push({ 不认识的字段: r.unknown, 提示: '字段名见 ayy_bank(action:"template")' })
           normd.push(r.item)
         }
         if (problems.length) {
-          throw new Error('录题字段不全：' + JSON.stringify(problems) + '\n照这个填：' + JSON.stringify(bankTemplate().item))
+          throw new Error(
+            '录题被拒：' + JSON.stringify(problems) + '\n来源格式例：2026年湖北省公务员考试行测（网友回忆版）\n字段模板：ayy_bank(action:"template")',
+          )
         }
         const noDigest = normd.filter((x) => !x.digest).length
         for (const it of normd) {
@@ -632,6 +661,7 @@ export function apply(ctx) {
         }
         return {
           ok: true, added: ids.length, 覆盖: ups || 0, ids, total, 已建向量: embedded,
+          ...(sourceWarns.length ? { 来源建议补全: sourceWarns.slice(0, 5) } : {}),
           ...(noDigest ? { 提示: String(noDigest) + " 条没写 digest（当时思路）——以后复盘会缺东西" } : {}),
           ...(unknown.size ? { 新题型: [...unknown.keys()], 提示: '这些题型不在 taxonomy.json 里；用得多了可以加进去，或者就这么放着也行' } : {}),
         }
@@ -727,6 +757,10 @@ export function apply(ctx) {
 
       if (action === 'report') {
         const p2 = args?.paper || {}
+        {
+          const cs0 = checkSource(p2.source)
+          if (!cs0.ok) throw new Error('卷子来源不合格：' + JSON.stringify({ 来源: p2.source, 缺: cs0.errors, 例: '2026年湖北省公务员考试行测（网友回忆版）' }))
+        }
         const d = open()
         const info = d.prepare(`INSERT INTO papers (day, source, subject, total, right_n, wrong_n, seconds, score, note, created)
           VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
@@ -814,7 +848,16 @@ export function apply(ctx) {
           if (text.includes(anchor)) ok++
           else bad.push({ id: r.id, doc: r.doc, 原因: `本子里找不到「${anchor}」` })
         }
-        return { 总数: rows.length, 好的: ok, 断了: bad.length, 明细: bad.slice(0, 20) }
+        const badSrc = []
+        const seenSrc = new Set()
+        for (const rr of d.prepare('SELECT DISTINCT source FROM questions').all()) {
+          const sv = String(rr.source || '')
+          if (seenSrc.has(sv)) continue
+          seenSrc.add(sv)
+          const c2 = checkSource(sv)
+          if (!c2.ok) badSrc.push({ 来源: sv, 缺: c2.errors })
+        }
+        return { 总数: rows.length, 好的: ok, 断了: bad.length, 明细: bad.slice(0, 20), 来源不合规数: badSrc.length, 来源不合规: badSrc.slice(0, 20) }
       }
 
       if (action === 'taxonomy') {
